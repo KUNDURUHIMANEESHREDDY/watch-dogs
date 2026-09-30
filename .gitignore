@@ -1,0 +1,7 @@
+node_modules/
+.watchdog/
+*.log
+.daemon.*
+.d.*
+.testout.txt
+.t.txt

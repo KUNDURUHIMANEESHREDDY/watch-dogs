@@ -1,0 +1,251 @@
+/**
+ * The watcher: a single process that owns findings, cooldown, the LLM queue, and
+ * autonomy. Capture layers feed it lines; it is the only thing that decides.
+ */
+import { EventEmitter } from 'node:events';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { evaluate, severityAtLeast, SEVERITY } from '../analyze/rules.mjs';
+import { Advisor } from '../analyze/advisor.mjs';
+import { Applier } from '../act/apply.mjs';
+import { redact } from '../capture/stream.mjs';
+import { log } from '../core/log.mjs';
+
+/**
+ * Broad "this is definitely an error" shape, used only to decide whether a line
+ * the rules did NOT claim is worth asking the model about. Deliberately wider
+ * than any single rule: the question is not "is this a known error" but "does
+ * this look like something went wrong".
+ */
+const ERROR_SHAPE =
+  /(^|\s)(error|errors|failed|failure|fatal|panic|exception|traceback|denied|refused|unreachable|invalid|unexpected|cannot|unable to|not found|no such file|unresolved|unhandled|timed? ?out)\b|^\s*(E\d{4}|FATAL)|\bERR!|:[0-9]+:[0-9]+: (error|fatal)|\b[A-Za-z]*(Error|Exception)\b\s*:/i;
+
+/**
+ * Success statements that happen to contain an error word. Found by the sandbox:
+ * "Build completed with 0 errors" was triaged as a failure. Negation has to be
+ * tested before the broad shape, or the residual path burns LLM budget on good news.
+ */
+const NOT_AN_ERROR =
+  /\b(0|zero|no)\s+(errors?|failures?|failings?|warnings?)\b|\bcompleted with\b|\bbuild (succeeded|successful)\b|\bnothing to commit\b|\ball tests? passed\b/i;
+
+/** Statuses meaning the advisor itself is broken, as opposed to merely busy. */
+const ADVISOR_DOWN = new Set(['unavailable', 'timeout', 'failed', 'unparseable']);
+
+export function looksLikeError(line) {
+  if (NOT_AN_ERROR.test(line)) return false;
+  return ERROR_SHAPE.test(line);
+}
+
+export class Watcher extends EventEmitter {
+  #cfg;
+  #advisor;
+  #applier;
+  #findings = [];
+  #cooldown = new Map();
+  #llmBudget = 0;
+  #findingsPath;
+  #advisorWarned = false;
+
+  constructor(cfg) {
+    super();
+    this.#cfg = cfg;
+    mkdirSync(cfg.paths.data, { recursive: true });
+    this.#findingsPath = join(cfg.paths.data, 'findings.jsonl');
+    this.#advisor = new Advisor({
+      cli: cfg.analyze.llm.cli,
+      model: cfg.analyze.llm.model,
+      timeoutMs: cfg.analyze.llm.timeoutMs,
+    });
+    this.#applier = new Applier({
+      projectRoot: cfg.projectRoot,
+      dataDir: cfg.paths.data,
+      autonomy: cfg.autonomy,
+      allowlist: cfg.allowlist ?? [],
+    });
+  }
+
+  get applier() {
+    return this.#applier;
+  }
+
+  get llmBudget() {
+    return this.#llmBudget;
+  }
+
+  /**
+   * Feed one captured line. Returns the findings the rules produced; LLM work is
+   * fire-and-forget and reports back via events.
+   */
+  async ingest(line, { sessionId, cwd, shell } = {}) {
+    const text = this.#cfg.capture.redact ? redact(line) : line;
+    const produced = evaluate(text, { sessionId, cwd });
+
+    // Residual triage. Found by the sandbox: the advisor used to only ever see
+    // problems the rules already understood, so it could never contribute
+    // anything the rules did not already know. An error-shaped line that no rule
+    // claimed is precisely the case a second opinion is for.
+    if (!produced.length && this.#cfg.analyze.llm.enabled && looksLikeError(text)) {
+      this.#triage(text, { sessionId, cwd, shell });
+    }
+
+    if (!produced.length) return [];
+
+    const enriched = [];
+    for (const f of produced) {
+      const rec = { ...f, shell, raw: text };
+      rec.signature = `${rec.ruleId}::${rec.evidence.slice(0, 120)}`;
+
+      const last = this.#cooldown.get(rec.signature) ?? 0;
+      if (Date.now() - last < this.#cfg.analyze.cooldownMs) {
+        rec.suppressed = 'cooldown';
+        this.#record(rec);
+        enriched.push(rec);
+        continue;
+      }
+      this.#cooldown.set(rec.signature, Date.now());
+
+      const eligible =
+        this.#cfg.analyze.llm.enabled &&
+        rec.confidence !== 'high' &&
+        severityAtLeast(rec.severity, this.#cfg.analyze.llm.minSeverity) &&
+        this.#llmBudget < this.#cfg.analyze.llm.maxInvocationsPerSession;
+
+      if (eligible) {
+        this.#llmBudget++;
+        rec.advisor = { pending: true };
+        this.#record(rec);
+        this.#askAdvisor(rec).catch((e) => log.warn('advisor failed', e));
+      } else {
+        rec.advisor = { pending: false, reason: this.#cfg.analyze.llm.enabled ? 'not eligible' : 'llm disabled' };
+      }
+
+      this.#runFix(rec, { cwd });
+      this.#record(rec);
+      enriched.push(rec);
+      this.emit('finding', rec);
+    }
+
+    this.#trim();
+    return enriched;
+  }
+
+  /**
+   * Ask the model about an error line no rule recognised. Kept separate from the
+   * rule path so its provenance stays visible on the record.
+   */
+  #triage(text, ctx) {
+    const signature = `residual::${text.slice(0, 120)}`;
+    const last = this.#cooldown.get(signature) ?? 0;
+    if (Date.now() - last < this.#cfg.analyze.cooldownMs) return;
+    if (this.#llmBudget >= this.#cfg.analyze.llm.maxInvocationsPerSession) return;
+    this.#cooldown.set(signature, Date.now());
+    this.#llmBudget++;
+
+    const rec = {
+      ruleId: 'unrecognised-error',
+      severity: 'medium',
+      confidence: 'unknown',
+      title: 'Error line not matched by any rule',
+      explain:
+        'This line looks like a failure but no deterministic rule recognised it, so the model was asked for a second opinion.',
+      evidence: text.slice(0, 500),
+      fix: null,
+      tags: ['residual'],
+      cwd: ctx.cwd,
+      sessionId: ctx.sessionId,
+      at: new Date().toISOString(),
+      signature,
+      shell: ctx.shell,
+      raw: text,
+      advisor: { pending: true },
+    };
+    this.#record(rec);
+    this.emit('finding', rec);
+    this.#askAdvisor(rec).catch((e) => log.warn('advisor failed on residual', e));
+  }
+
+  async #askAdvisor(rec) {
+    const advice = await this.#advisor.review({
+      evidence: rec.evidence,
+      cwd: rec.cwd ?? this.#cfg.projectRoot,
+      title: rec.title,
+      // Tracing needs the resolved config to know whether it is on, and the
+      // session id so traces from one terminal group together.
+      cfg: this.#cfg,
+      sessionId: rec.sessionId,
+    });
+    rec.advisor = {
+      pending: false,
+      verdict: advice.verdict,
+      confidence: advice.confidence,
+      summary: advice.summary,
+      error: advice.error,
+      status: advice.status ?? null,
+    };
+
+    // A dead or unfunded LLM must not look like a model saying "unsure".
+    const down = advice.status && (advice.status.startsWith('provider_') || ADVISOR_DOWN.has(advice.status));
+    if (down && !this.#advisorWarned) {
+      this.#advisorWarned = true;
+      this.emit('advisor-down', advice);
+    }
+
+    if (advice.verdict === 'problem' && advice.fix && advice.confidence >= 0.6) {
+      const results = [];
+      for (const file of advice.fix.files) {
+        results.push(
+          this.#applier.apply({ kind: 'patch-file', path: file.path, find: file.find, replace: file.replace }, { cwd: rec.cwd }),
+        );
+      }
+      rec.advisor.acted = true;
+      rec.applied = results[0] ?? null;
+    }
+    this.#record(rec);
+    this.emit('finding-updated', rec);
+  }
+
+  /** Applies a fix without ever blocking the ingest path. */
+  #runFix(rec, { cwd }) {
+    if (!rec.fix || rec.severity === 'info') return;
+    if (rec.fix.kind === 'command' || rec.fix.kind === 'install-deps') {
+      rec.applied = { status: 'running' };
+      this.#applier
+        .applyAsync(rec.fix, { cwd })
+        .then((result) => {
+          rec.applied = result;
+          this.#record(rec);
+          this.emit('finding-updated', rec);
+        })
+        .catch((e) => {
+          rec.applied = { status: 'error', why: e.message };
+          this.#record(rec);
+        });
+    } else {
+      rec.applied = this.#applier.apply(rec.fix, { cwd });
+    }
+  }
+
+  #trim() {
+    const max = this.#cfg.analyze.maxFindingsPerSession;
+    if (this.#findings.length > max) this.#findings.splice(0, this.#findings.length - max);
+  }
+
+  #record(rec) {
+    const i = this.#findings.findIndex(
+      (f) => f === rec || (f.signature === rec.signature && f.sessionId === rec.sessionId && f.at === rec.at),
+    );
+    if (i !== -1) this.#findings[i] = rec;
+    try {
+      appendFileSync(this.#findingsPath, JSON.stringify(rec) + '\n');
+    } catch (e) {
+      log.warn('could not persist finding', e);
+    }
+  }
+
+  findings(filter = {}) {
+    return this.#findings
+      .filter((f) => (filter.minSeverity ? severityAtLeast(f.severity, filter.minSeverity) : true))
+      .filter((f) => (filter.rule ? f.ruleId === filter.rule : true))
+      .sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity] || (a.at < b.at ? 1 : -1));
+  }
+}
