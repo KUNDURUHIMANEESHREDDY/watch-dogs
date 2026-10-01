@@ -434,9 +434,11 @@ is not there.
 - **Rules judge one line at a time.** A multi-line stack trace is judged as N
   independent lines. Fine for today's rules; it will need context for anything that
   spans several lines.
-- **Autostart has no supervisor on this machine.** The Startup-folder launcher
-  starts the daemon at logon but cannot restart it after a crash, so `wd status` is
-  the only thing that tells you whether coverage is real. See Autostart above.
+- **Recovery is on next shell start, not automatic.** The Startup-folder launcher
+  starts the daemon at logon but cannot restart it after a crash; what heals a
+  crash is the heartbeat check in your shell profile, which fires the next time
+  you open a terminal. Until then `wd status` is the only thing that tells you
+  whether coverage is real. See Autostart above.
 
 ## Rules with no fix, on purpose
 
@@ -444,3 +446,13 @@ is not there.
 per project (raise `--max-old-space-size`? tune a worker pool? re-run which suite?),
 and a generic command would be a guess wearing the costume of an action. A finding
 with no fix beats a fix that reports `skipped: no command to run`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+That matters more than usual here: the safety rails in `src/act/` are the part
+worth reusing. Autonomy is only defensible because refusing happens in code that
+does not consult whatever proposed the action. If you fork this, keep that
+separation intact.
+
