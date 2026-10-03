@@ -6,6 +6,7 @@
  */
 import { resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
+import { realpathNearest, realProjectRoot } from './containment.mjs';
 
 export const REFUSAL = Object.freeze({
   PATH_OUTSIDE_ROOT: 'path_outside_project_root',
@@ -107,6 +108,11 @@ function isSystemPath(p) {
  * @param {{projectRoot?: string, cwd?: string}} ctx
  * @returns {{ok: true} | {ok: false, code: string, why: string}}
  */
+function isInside(root, candidate) {
+  const rel = relative(root, candidate);
+  return !rel.startsWith('..') && !isAbsolute(rel);
+}
+
 export function isRefused(action, ctx = {}) {
   const root = resolve(ctx.projectRoot ?? process.cwd());
 
@@ -114,9 +120,22 @@ export function isRefused(action, ctx = {}) {
     const p = isAbsolute(action.path) ? action.path : resolve(ctx.cwd ?? root, action.path);
     if (isSecretPath(p)) return refuse(REFUSAL.SECRET_FILE, 'refuses to read or write credential files');
     if (isSystemPath(p)) return refuse(REFUSAL.SYSTEM_PATH, 'refuses to modify operating-system paths');
+
+    // Lexical containment is not a boundary. A junction inside the project can
+    // satisfy every relative() test and still resolve outside it, so the real
+    // location is checked too. Both comparisons are required: the lexical one
+    // first because it is cheap and catches the obvious cases.
     const rel = relative(root, p);
     if (rel.startsWith('..') || isAbsolute(rel)) {
       return refuse(REFUSAL.PATH_OUTSIDE_ROOT, `refuses to touch ${p} which is outside the project root`);
+    }
+    const real = realpathNearest(p);
+    if (!isInside(realProjectRoot(root), real)) {
+      return refuse(
+        REFUSAL.PATH_OUTSIDE_ROOT,
+        `refuses to touch ${p} because it resolves to ${real}, outside the project root. ` +
+          'A link inside the project points somewhere else.',
+      );
     }
   }
 

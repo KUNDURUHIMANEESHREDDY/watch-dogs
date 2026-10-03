@@ -10,6 +10,7 @@ import { join, dirname, resolve, relative, basename } from 'node:path';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
+import { containedPath } from './containment.mjs';
 import { log } from '../core/log.mjs';
 
 export class Applier {
@@ -95,10 +96,16 @@ export class Applier {
   #queue = Promise.resolve();
 
   #resolveInRoot(p, cwd) {
-    const abs = resolve(cwd ?? this.projectRoot, p);
-    const rel = relative(this.projectRoot, abs);
-    if (rel.startsWith('..')) throw new Error(`refusing to write outside project root: ${p}`);
-    return abs;
+    // This is the last check before bytes hit the disk, so it gets the same
+    // realpath treatment as the guard. A junction inside the project passes
+    // every relative() test and still writes outside it; verified with
+    // mklink /J, which needs no elevation.
+    const check = containedPath(this.projectRoot, resolve(cwd ?? this.projectRoot, p));
+    if (!check.ok) {
+      const detail = check.why === 'reparse' ? ` (resolves to ${check.real})` : '';
+      throw new Error(`refusing to write outside project root: ${p}${detail}`);
+    }
+    return check.abs;
   }
 
   #snapshot(absPath) {
