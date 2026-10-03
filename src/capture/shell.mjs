@@ -73,15 +73,22 @@ export class TranscriptTailer {
       // Anything between the previous offset and this new start is context we
       // cannot attribute, so prime the splitter with it rather than splitting
       // mid-UTF8-sequence at an arbitrary byte.
+      //
+      // Those bytes are *emitted* below, not merely fed to the splitter, so the
+      // stored offset has to move past them. Leaving it at the old value made
+      // poll() re-read the whole primed window, reporting every line in it
+      // twice: duplicate findings, and duplicate LLM calls and applies.
+      let next = offset;
       if (offset > 0) {
         const size = statSync(file).size;
         if (size > offset) {
           const buf = Buffer.alloc(Math.min(size - offset, 4096));
-          readSync(fd, buf, 0, buf.length, offset);
-          for (const l of splitter.push(buf)) this.#onLines(l, this.#meta.get(file));
+          const read = readSync(fd, buf, 0, buf.length, offset);
+          for (const l of splitter.push(buf.subarray(0, read))) this.#onLines(l, this.#meta.get(file));
+          next = offset + read;
         }
       }
-      this.#splitters.set(file, { fd, offset, splitter });
+      this.#splitters.set(file, { fd, offset: next, splitter });
     } catch (e) {
       log.debug(`could not open transcript ${file}: ${e.message}`);
     }
