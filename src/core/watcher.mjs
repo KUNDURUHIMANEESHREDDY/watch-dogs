@@ -31,6 +31,14 @@ const NOT_AN_ERROR =
 /** Statuses meaning the advisor itself is broken, as opposed to merely busy. */
 const ADVISOR_DOWN = new Set(['unavailable', 'timeout', 'failed', 'unparseable']);
 
+/**
+ * How many sessions keep a budget entry. The daemon watches every terminal on
+ * the machine, so an unbounded map would retain one entry per shell that ever
+ * opened for the life of the process. Far above the number of terminals anyone
+ * actually has open at once.
+ */
+const MAX_TRACKED_BUDGET_SESSIONS = 500;
+
 export function looksLikeError(line) {
   if (NOT_AN_ERROR.test(line)) return false;
   return ERROR_SHAPE.test(line);
@@ -42,7 +50,10 @@ export class Watcher extends EventEmitter {
   #applier;
   #findings = [];
   #cooldown = new Map();
-  #llmBudget = 0;
+  // Per session, despite the single counter this replaced. A shared budget meant
+  // one terminal with a noisy build consumed the whole allowance and every other
+  // terminal got silence -- the opposite of what maxInvocationsPerSession says.
+  #llmBudget = new Map();
   #findingsPath;
   #advisorWarned = false;
 
@@ -69,7 +80,33 @@ export class Watcher extends EventEmitter {
   }
 
   get llmBudget() {
-    return this.#llmBudget;
+    return this.#llmBudget.size;
+  }
+
+  /** Invocations already spent by one session. */
+  #spent(sessionId) {
+    return this.#llmBudget.get(sessionId ?? '') ?? 0;
+  }
+
+  /**
+   * Charge one invocation to a session's budget.
+   *
+   * Bounded by the map growing without limit: a daemon that watches every
+   * terminal on a long uptime would otherwise retain one entry per shell that
+   * ever existed. Insertion order is oldest-first, so the front is the one to go.
+   */
+  #charge(sessionId) {
+    const key = sessionId ?? '';
+    this.#llmBudget.set(key, this.#spent(key) + 1);
+    while (this.#llmBudget.size > MAX_TRACKED_BUDGET_SESSIONS) {
+      const oldest = this.#llmBudget.keys().next().value;
+      if (oldest === undefined) break;
+      this.#llmBudget.delete(oldest);
+    }
+  }
+
+  #hasBudget(sessionId) {
+    return this.#spent(sessionId) < this.#cfg.analyze.llm.maxInvocationsPerSession;
   }
 
   /**
@@ -108,10 +145,10 @@ export class Watcher extends EventEmitter {
         this.#cfg.analyze.llm.enabled &&
         rec.confidence !== 'high' &&
         severityAtLeast(rec.severity, this.#cfg.analyze.llm.minSeverity) &&
-        this.#llmBudget < this.#cfg.analyze.llm.maxInvocationsPerSession;
+        this.#hasBudget(rec.sessionId);
 
       if (eligible) {
-        this.#llmBudget++;
+        this.#charge(rec.sessionId);
         rec.advisor = { pending: true };
         this.#record(rec);
         this.#askAdvisor(rec).catch((e) => log.warn('advisor failed', e));
@@ -137,9 +174,9 @@ export class Watcher extends EventEmitter {
     const signature = `residual::${text.slice(0, 120)}`;
     const last = this.#cooldown.get(signature) ?? 0;
     if (Date.now() - last < this.#cfg.analyze.cooldownMs) return;
-    if (this.#llmBudget >= this.#cfg.analyze.llm.maxInvocationsPerSession) return;
+    if (!this.#hasBudget(ctx.sessionId)) return;
     this.#cooldown.set(signature, Date.now());
-    this.#llmBudget++;
+    this.#charge(ctx.sessionId);
 
     const rec = {
       ruleId: 'unrecognised-error',
