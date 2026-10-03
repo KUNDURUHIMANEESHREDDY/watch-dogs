@@ -88,3 +88,26 @@ test('the wrapper creates the transcript before exporting it', () => {
 test('the wrapper honours WD_TRANSCRIPT_DIR like every other consumer', () => {
   assert.match(WRAPPER_SH, /WD_TRANSCRIPT_DIR/);
 });
+
+// ------------------------------------------------------- redaction boundary
+
+test('the transcript is written by the shell, so redaction cannot precede it', async () => {
+  // A claim this codebase used to make in two places: that secrets are stripped
+  // "before anything is written to disk". That is false. Start-Transcript writes
+  // the raw session as the shell runs, and the daemon only sees it afterwards.
+  //
+  // This test cannot make the exposure go away -- nothing in-process can, because
+  // the write belongs to PowerShell. What it can do is stop the documentation
+  // quietly tightening back into a lie.
+  const { readFileSync } = await import('node:fs');
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const config = readFileSync(new URL('../src/core/config.mjs', import.meta.url), 'utf8');
+
+  for (const [name, text] of [['README.md', readme], ['config.mjs', config]]) {
+    const overclaims = text.match(/secrets?[^.\n]*?(?:before anything (?:is )?written to disk|before anything hits disk)/gi);
+    assert.equal(overclaims, null, `${name} claims redaction happens before the shell's transcript exists: ${overclaims}`);
+  }
+  // The real boundary must still be documented, not just the false claim removed.
+  assert.match(readme, /Start-Transcript/, 'the transcript exposure is no longer explained anywhere');
+  assert.match(readme, /ACL|profile directory/, 'the actual mitigation is not stated');
+});

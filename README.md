@@ -199,6 +199,27 @@ whatever your terminal printed, and terminals are where secrets end up by
 accident. Prompts and completions go through the same redaction the capture layer
 already uses, and transcripts are clipped rather than shipped whole.
 
+### What redaction does and does not cover
+
+`capture.redact` applies to everything the watchdog itself stores or sends:
+findings, the journal, LLM prompts, Langfuse traces.
+
+It does **not** apply to the transcript file itself. PowerShell's
+`Start-Transcript` writes the raw session to `~/.watchdog/transcripts/*.log` as
+the shell runs, long before the daemon reads a byte. Between the moment a secret
+is echoed and the moment the daemon tails past it, that secret sits in that file
+unredacted.
+
+What bounds the exposure: the file is in your own profile directory, its ACL
+grants only you, SYSTEM and Administrators, and it is overwritten by the next
+session. What does not: redaction cannot happen earlier without replacing
+`Start-Transcript`, and truncating a live transcript would corrupt the session
+being recorded.
+
+So the honest version is: **the tool does not widen the exposure your own shell
+already has, and it does not eliminate it either.** If a secret reaches disk on
+your machine, assume it is in the transcript until the daemon has read past it.
+
 **Tracing cannot change behaviour.** If Langfuse is unreachable, the review still
 returns the identical result. Telemetry failing is a tracing problem, not a
 watchdog problem.
@@ -314,7 +335,7 @@ wd scan <file>          analyse a log    wd journal / wd rollback <id>
   "autonomy": "autonomous",
   "capture": {
     "layers": { "shell": true, "process": true, "conpty": false },
-    "redact": true          // secrets are stripped before anything hits disk
+    "redact": true          // secrets stripped from findings, journal, LLM and traces
   },
   "analyze": {
     "llm": {

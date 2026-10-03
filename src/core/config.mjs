@@ -26,7 +26,13 @@ export const DEFAULTS = Object.freeze({
       'python', 'python3', 'ipython', 'node', 'irb', 'psql', 'mysql', 'sqlite3',
     ],
     maxLineBytes: 64 * 1024, // guard against a pathological no-newline flood
-    redact: true, // strip secrets before anything is written to disk
+    // Applies to everything the watchdog itself stores or sends: findings, the
+    // journal, LLM prompts, Langfuse traces. It does NOT apply to the shell's own
+    // transcript, which PowerShell writes with Start-Transcript before the daemon
+    // reads a single byte. That file lands in the user's own profile directory
+    // with user-only permissions, but until it is read it holds whatever the
+    // terminal printed, secrets included.
+    redact: true,
   },
   analyze: {
     llm: {
