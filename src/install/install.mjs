@@ -3,7 +3,7 @@
  * re-running is safe and uninstall is exact. Existing user profiles are never
  * overwritten -- if a profile already exists we append a guarded block.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync, copyFileSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -115,25 +115,26 @@ ${END}`;
 export const buildBashBlock = () => BASH_BLOCK;
 
 const BASH_BLOCK = String.raw`# >>> watchdog begin >>> (managed block - do not edit, safe to delete)
-export WD_DISABLE=
 if [ -n "$WD_DISABLE" ]; then return 0 2>/dev/null || true; fi
 export PATH="$HOME/.watchdog/bin:$PATH"
-# Git Bash: record each session so the daemon can tail it.
-if [ -n "$HOME" ]; then
-  # Same override as the PowerShell block, spelled without bash brace syntax:
-  # these blocks live inside JS template literals, where a dollar-brace is read as
-  # JS interpolation and silently truncates the file.
-  __wd_t="$WD_TRANSCRIPT_DIR"
-  if [ -z "$__wd_t" ]; then __wd_t="$HOME/.watchdog/transcripts"; fi
-  mkdir -p "$__wd_t" 2>/dev/null
-  __wd_f="$__wd_t/ba-$$-$(date +%Y%m%d-%H%M%S).log"
+# Bash capture deliberately does NOT run "script" from here.
+#
+# Given no command, script launches its own interactive shell. Calling it from
+# .bashrc therefore nests a shell inside the one already starting and waits for
+# it to exit, so the user gets a second prompt in a shell they never asked for.
+#
+# The transcript has to wrap the shell from outside instead, which is what the
+# wd-sh wrapper in ~/.watchdog/bin does. So this block only announces a session a
+# wrapper has actually started, via WD_BASH_CAPTURE_FILE. Writing the sidecar
+# unconditionally was worse than the nesting: it advertised a transcript that
+# never existed, so the daemon discovered a session and tailed a file that was
+# never going to grow.
+#
+# No backticks in these comments on purpose. This is a String.raw template, so an
+# escaped backtick would be written out as a literal backslash-backtick.
+if [ -n "$WD_BASH_CAPTURE_FILE" ] && [ -f "$WD_BASH_CAPTURE_FILE" ]; then
   printf '{"shell":"bash","pid":%s,"cwd":"%s","file":"%s","ide":"Git Bash"}\n' \
-    "$$" "$(pwd)" "$__wd_f" > "$__wd_f.json" 2>/dev/null
-  # script(1) is present in Git for Windows; without it we still get a header.
-  if command -v script >/dev/null 2>&1; then
-    script -q -f "$__wd_f" >/dev/null 2>&1
-  fi
-  unset __wd_t __wd_f
+    "$$" "$(pwd)" "$WD_BASH_CAPTURE_FILE" > "$WD_BASH_CAPTURE_FILE.json" 2>/dev/null
 fi
 # <<< watchdog end <<<`;
 
@@ -173,6 +174,47 @@ function upsertBlock(file, begin, end, block) {
   return { file, action: existing.length ? 'appended' : 'created', hadUserContent: existing.trim().length > 0 };
 }
 
+/**
+ * The bash capture wrapper.
+ *
+ * `script` has to sit *outside* the shell it records. Putting it in .bashrc
+ * nests a second interactive shell inside the one already starting and waits for
+ * it, so the wrapper launches bash under `script` instead and exports the path
+ * for the profile block to announce.
+ *
+ * Note this cannot be done in .bashrc at all: by the time .bashrc runs, the
+ * shell is already running and its output is already going to the real terminal
+ * rather than to `script`.
+ */
+export const WRAPPER_SH = `#!/usr/bin/env bash
+# watchdog bash capture wrapper (managed)
+#
+# Starts a bash session under \`script\` so its output is teed to a transcript.
+# Use this instead of a bare \`bash\` when you want the session captured:
+#
+#     wd-sh            interactive, captured
+#     wd-sh -c 'cmd'   run one command, captured
+#
+# Plain bash still works; it simply is not captured. Git for Windows does not
+# ship \`script\`, so on Git Bash this reports the limitation instead of failing
+# quietly.
+set -u
+
+__wd_t="\${WD_TRANSCRIPT_DIR:-\$HOME/.watchdog/transcripts}"
+mkdir -p "\$__wd_t" 2>/dev/null || true
+
+if ! command -v script >/dev/null 2>&1; then
+  echo "wd-sh: this system has no 'script', so bash sessions cannot be captured." >&2
+  echo "        falling through to a normal shell. Detection itself is unaffected." >&2
+  exec bash "\$@"
+fi
+
+__wd_f="\$__wd_t/ba-\$\$-\$(date +%Y%m%d-%H%M%S).log"
+: > "\$__wd_f" || exec bash "\$@"
+export WD_BASH_CAPTURE_FILE="\$__wd_f"
+exec script -q -f "\$__wd_f" bash "\$@"
+`;
+
 function installHooks(binDir, entryScript) {
   mkdirSync(binDir, { recursive: true });
   const hookPs1 = join(binDir, 'wd-hook.ps1');
@@ -187,7 +229,17 @@ function installHooks(binDir, entryScript) {
   const ps1Shim = join(binDir, 'wd.ps1');
   writeFileSync(ps1Shim, `& '${process.execPath}' '${entryScript}' @args\n`);
 
-  return { hookPs1, hookSh, cmdShim, ps1Shim };
+  const wrapperSh = join(binDir, 'wd-sh');
+  writeFileSync(wrapperSh, WRAPPER_SH);
+  // Git Bash executes files through the shebang, but a missing exec bit on
+  // Windows means the common invocation is still `bash wd-sh`.
+  try {
+    chmodSync(wrapperSh, 0o755);
+  } catch {
+    /* best effort: chmod is a no-op on some Windows filesystems */
+  }
+
+  return { hookPs1, hookSh, cmdShim, ps1Shim, wrapperSh };
 }
 
 export function install({ toolRoot, shells = ['powershell', 'bash'], ides = ['Code', 'Cursor'] }) {

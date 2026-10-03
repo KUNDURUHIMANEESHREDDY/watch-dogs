@@ -261,10 +261,16 @@ test('the PowerShell profile block writes transcripts to the overridden director
   );
 });
 
-test('the bash profile block honours the same override', () => {
+test('the bash profile block takes its transcript path from the wrapper', () => {
+  // The block no longer chooses a path: choosing one means writing a sidecar for
+  // a transcript that may never exist. The wrapper creates the file and exports
+  // the path; WD_TRANSCRIPT_DIR is honoured there instead.
   const block = buildBashBlock();
-  assert.match(block, /__wd_t="\$WD_TRANSCRIPT_DIR"/, 'the bash block writes transcripts to the hardcoded path');
-  assert.match(block, /if \[ -z "\$__wd_t" \]/, 'the bash block has no default when the override is unset');
+  assert.match(block, /WD_BASH_CAPTURE_FILE/, 'the bash block no longer reads a path from the wrapper');
+  assert.ok(
+    !/__wd_t=/.test(block),
+    'the bash block is choosing a transcript directory again, which is how it advertised files that never grew',
+  );
 });
 
 test('neither rendered profile block contains a dollar-brace', () => {
