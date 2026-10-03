@@ -12,7 +12,7 @@ export const DEFAULTS = Object.freeze({
   capture: {
     layers: {
       shell: true, //   layer 1: profile-injected session capture
-      process: true, // layer 2: detached process / exit-code watcher
+      process: true, // layer 2: detached process lifecycle. No exit codes -- see procwatch.mjs
       conpty: false, //  layer 3: raw ConPTY byte proxy (opt-in, reports availability)
     },
     // Programs that own the screen and cannot survive piped stdio.

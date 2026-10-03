@@ -2,9 +2,25 @@
  * Layer 2: detached process watcher.
  *
  * Covers the sessions layer 1 structurally cannot see: processes started by an
- * IDE task runner, a scheduler, or a shell that was never instrumented. It has no
- * output text, only process identity and exit codes, so it contributes crash and
- * non-zero-exit findings rather than content analysis.
+ * IDE task runner, a scheduler, or a shell that was never instrumented.
+ *
+ * What it does NOT have is exit codes, and the reason is worth stating because
+ * the code previously claimed otherwise. A process exit code is delivered to the
+ * parent that spawned the process. For anything this layer exists to watch, the
+ * parent is an IDE or a scheduler, not us, so the code is never sent our way.
+ *
+ * The two ways to recover it on Windows both fail here:
+ *   - WMI process-stop tracing (Win32_ProcessStopTrace, which does carry
+ *     ExitStatus) returns "Access denied" for a non-administrator. Verified.
+ *   - ETW would work but needs a native binding, which is the same wall that
+ *     leaves the ConPTY layer disabled.
+ *
+ * Commands the watchdog itself spawns DO have exit codes, because runCapture()
+ * gets the 'close' event from its own child. So the absence here is specific to
+ * externally started processes, not a gap in the execution path.
+ *
+ * What remains is identity, lifetime and workload-shapedness, and this layer is
+ * honest about that: it reports a lifecycle event, never a diagnosis.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -14,8 +30,6 @@ const exec = promisify(execFile);
 
 // Command names that indicate a real workload rather than a shell or IDE host.
 const WORKLOAD = /^(node|npm|pnpm|yarn|npx|tsc|eslint|jest|vitest|pytest|python3?|pip|poetry|cargo|rustc|go|java|javac|gradle|mvn|dotnet|msbuild|make|cmake|ninja|gcc|g\+\+|clang|docker|dotnet-watch|next|nuxt|vite|webpack|ts-node|tsx|babel|swc|deno|bun)$/i;
-
-const CRASH_CODES = new Set([-1073741819, -1073740791, -1073741510, 139, 134, 133]); // AV, stack buffer, ctrl-c, SIGABRT, SIGTRAP
 
 export class ProcessWatcher {
   #cfg;
@@ -132,8 +146,14 @@ export class ProcessWatcher {
       name: rec.name,
       pid: rec.pid,
       cmd: rec.cmd,
+      // Stated on the finding itself, not only in a comment. "Exited" reads like
+      // a diagnosis until you know the exit code was never available to us, and a
+      // reader of the findings log has no access to the source file.
+      exitCode: null,
       evidence: `${rec.name} (pid ${rec.pid}) exited after ${secs}s`,
-      note: 'no output captured; this is a process lifecycle event, not a diagnosis',
+      note:
+        'no output captured and no exit code available: this layer did not spawn the ' +
+        'process, so the code was never delivered to us. A lifecycle event, not a diagnosis.',
       at: new Date().toISOString(),
     });
   }
@@ -148,5 +168,3 @@ export class ProcessWatcher {
 function isOwnProcess(pid) {
   return pid === process.pid || pid === process.ppid;
 }
-
-export { CRASH_CODES };

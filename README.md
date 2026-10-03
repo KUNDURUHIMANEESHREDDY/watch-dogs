@@ -18,7 +18,7 @@ its coverage in layers, and is explicit about what each layer can and cannot see
 | Layer | What it sees | Cost | Status here |
 |---|---|---|---|
 | **1. Shell transcripts** | Everything written to the console of any instrumented shell, including full-screen apps | none -- uses the shell's own transcript | **active** |
-| **2. Process watcher** | Process identity and exit events for detached work (IDE tasks, schedulers) | one CIM query every 5s | **active** |
+| **2. Process watcher** | Process identity and lifecycle events for detached work (IDE tasks, schedulers). **Not exit codes** -- see below | one CIM query every 5s | **active** |
 | **3. ConPTY proxy** | Raw bytes in both directions | needs a native ConPTY binding | **off -- reports `unavailable`** |
 
 Layer 1 is the one that matters and it has no hooks, no injection, and no admin.
@@ -472,11 +472,22 @@ is not there.
   transcript layer but render as a stream of cursor-positioned writes, so the
   reconstructed lines are approximate. Detection still works; the evidence line may
   look scrambled.
-- **Detached processes** (layer 2) yield no output text, so a process that exits
-  cleanly is reported as an `info` lifecycle event, never as a diagnosis. Only
-  processes whose command line references the project root are tracked -- otherwise
-  the layer reports the machine's own infrastructure, which is how a monitor gets
-  ignored.
+- **Layer 2 has no exit codes, and cannot get them.** A process exit code goes to
+  the parent that spawned the process; for the IDE tasks and scheduler jobs this
+  layer exists to watch, that parent is not us. The two Windows routes both fail
+  here: WMI process-stop tracing returns *Access denied* for a non-administrator
+  (verified on this machine), and ETW needs a native binding, which is the same
+  wall that leaves ConPTY disabled. So a process that exited cleanly and one that
+  crashed look identical to this layer.
+
+  This is **not** a gap in the execution path: commands the watchdog spawns itself
+  do report their exit code, because `runCapture` sees the `close` event on its
+  own child. The absence is specific to externally started processes.
+
+- **Only processes whose command line references the project root are tracked** --
+  otherwise the layer reports the machine's own infrastructure, which is how a
+  monitor gets ignored. See the next item: on Windows this attribution is weaker
+  than it looks.
 - **Arbitrary `command` actions are still denylist-protected.** Dependency installs are
   allowlisted, but a rule or model proposal of some other shell command passes if it
   matches no known-bad pattern. Converting the remaining rails to an allowlist of
