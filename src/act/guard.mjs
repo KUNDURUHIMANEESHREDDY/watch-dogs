@@ -15,6 +15,7 @@ export const REFUSAL = Object.freeze({
   DESTRUCTIVE_DELETE: 'destructive_delete',
   SECRET_FILE: 'secret_file',
   SYSTEM_PATH: 'system_path',
+  SENSITIVE_FILE_CLASS: 'sensitive_file_class',
   REMOTE_EXEC: 'remote_code_execution',
   PRODUCTION: 'production_environment',
   PUBLISH: 'package_publish',
@@ -43,6 +44,54 @@ const SECRET_PATTERNS = [
   /(^|[\\/])\.git-credentials$/i,
   /(^|[\\/])secrets?\//i,
 ];
+
+/**
+ * Files an LLM may never edit on its own.
+ *
+ * The existing rails answer "is this path obviously forbidden?". They do not
+ * answer "is this change safe to make without asking", and for a file whose
+ * contents *are* the authority, that is the question that matters. A single
+ * model-authored line in a CI workflow, a git hook or a package manifest runs on
+ * every machine that touches the repo -- usually with credentials, usually not
+ * here.
+ *
+ * This is deliberately asymmetric. These paths are refused for model-proposed
+ * edits and permitted for rule-proposed ones. The distinction is provenance:
+ * a rule ships with this program and its fix was reviewed when it was written,
+ * whereas a model's fix is a guess about code it could not read. Nothing here
+ * inspects the replacement text, which is the honest reason a path list is the
+ * gate: the model can put anything in `replace`.
+ *
+ * Suggesting one of these is still useful, so refusal downgrades the finding to
+ * "needs a human" rather than dropping it.
+ */
+const SENSITIVE_CLASSES = [
+  { re: /(^|[\\/])\.git[\\/]/i, why: 'git internals and hooks' },
+  { re: /(^|[\\/])\.github[\\/]workflows[\\/]/i, why: 'CI workflows run with repository credentials' },
+  { re: /(^|[\\/])\.github[\\/]actions[\\/]/i, why: 'composite CI actions run on every job' },
+  { re: /(^|[\\/])\.gitlab-ci\.ya?ml$/i, why: 'CI configuration' },
+  { re: /(^|[\\/])Jenkinsfile$/i, why: 'CI configuration' },
+  { re: /(^|[\\/])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/i, why: 'package manifests decide what code runs' },
+  { re: /(^|[\\/])(pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?)$/i, why: 'package manifests decide what code runs' },
+  { re: /(^|[\\/])requirements.*\.txt$/i, why: 'package manifests decide what code runs' },
+  { re: /(^|[\\/])(Cargo\.toml|Cargo\.lock|go\.mod|go\.sum)$/i, why: 'package manifests decide what code runs' },
+  { re: /\.(sh|bash|zsh|ps1|psm1|bat|cmd)$/i, why: 'shell scripts execute on other machines' },
+  { re: /(^|[\\/])(Dockerfile|docker-compose.*\.ya?ml|Containerfile)$/i, why: 'container build definitions' },
+  { re: /\.(tf|tfvars)$/i, why: 'infrastructure definitions that provision real resources' },
+  { re: /(^|[\\/])k8s[\\/]/i, why: 'cluster manifests' },
+  { re: /(^|[\\/])Makefile$/i, why: 'build entry points' },
+  { re: /(^|[\\/])(tsconfig[^\\/]*\.json|\.(babelrc|eslintrc|prettierrc)[^\\/]*)$/i, why: 'build and tooling configuration' },
+  { re: /\.(exe|dll|so|dylib|node)$/i, why: 'executables and binaries' },
+];
+
+/** @returns {{why: string}|null} */
+export function sensitiveClass(relPath) {
+  const norm = String(relPath).replace(/\\/g, '/');
+  for (const { re, why } of SENSITIVE_CLASSES) {
+    if (re.test(norm)) return { why };
+  }
+  return null;
+}
 
 const SYSTEM_PREFIXES = [
   'C:\\Windows',
@@ -136,6 +185,25 @@ export function isRefused(action, ctx = {}) {
         `refuses to touch ${p} because it resolves to ${real}, outside the project root. ` +
           'A link inside the project points somewhere else.',
       );
+    }
+
+    // Provenance matters more than the path. A rule's fix was reviewed when the
+    // rule was written; a model's fix is a guess about code it could not read.
+    //
+    // Untrusted unless declared otherwise: a default of 'allowed' would mean that
+    // forgetting the source argument silently disabled the whole policy, and that
+    // is precisely how it would have shipped broken. 'rule' is the only value that
+    // grants the exemption, because it is the only one a caller asserts rather
+    // than omits.
+    if (ctx.source !== 'rule') {
+      const cls = sensitiveClass(rel);
+      if (cls) {
+        return refuse(
+          REFUSAL.SENSITIVE_FILE_CLASS,
+          `${cls.why} may not be edited by the model without a human. ` +
+            `Proposed edit to ${rel} is reported as a suggestion instead.`,
+        );
+      }
     }
   }
 

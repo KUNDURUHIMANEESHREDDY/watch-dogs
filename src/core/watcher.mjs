@@ -194,11 +194,28 @@ export class Watcher extends EventEmitter {
       const results = [];
       for (const file of advice.fix.files) {
         results.push(
-          this.#applier.apply({ kind: 'patch-file', path: file.path, find: file.find, replace: file.replace }, { cwd: rec.cwd }),
+          // source: 'llm' so the guard applies the file-class policy. Without it
+          // the model could rewrite a CI workflow or a package manifest here,
+          // because the existing rails only ask whether the path is forbidden.
+          this.#applier.apply(
+            { kind: 'patch-file', path: file.path, find: file.find, replace: file.replace },
+            { cwd: rec.cwd, source: 'llm' },
+          ),
         );
       }
       rec.advisor.acted = true;
       rec.applied = results[0] ?? null;
+
+      // A refusal here is not a silent no-op. The proposal was reasonable and
+      // the human still needs to see it, so the finding is recorded as
+      // suggestion-only rather than disappearing.
+      const refused = results.find((r) => r?.status === 'refused');
+      if (refused) {
+        rec.advisor.acted = false;
+        rec.advisor.requiresHuman = true;
+        rec.advisor.why = refused.why ?? 'refused';
+        this.emit('needs-human', rec);
+      }
     }
     this.#record(rec);
     this.emit('finding-updated', rec);

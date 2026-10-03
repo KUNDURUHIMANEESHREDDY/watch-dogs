@@ -60,6 +60,37 @@ deprecated APIs | unresolved markers | process exits
 Verified end to end on a real shell, correctly ignoring `npm WARN`, `git push`
 success, and passing build output.
 
+### What the model may not edit on its own
+
+The rails answer "is this path obviously forbidden?". They never asked "is this
+change safe to make without asking", and **nothing inspected the replacement
+text** -- so a model asked to fix a build error could rewrite a CI workflow, a
+git hook or a package manifest. Those paths are inside the project, are not
+secret files, and sailed straight through.
+
+They are now refused for model-proposed edits and permitted for rule-proposed
+ones. The distinction is provenance: a rule ships with this program and its fix
+was reviewed when it was written, whereas a model's fix is a guess about code it
+could not read. Nothing here inspects what the model wants to write, which is
+the honest reason a path list is the gate at all.
+
+| Never model-edited | Why |
+|---|---|
+| `.github/workflows/`, `.github/actions/`, `.gitlab-ci.yml`, `Jenkinsfile` | run with repository credentials, usually on machines you are not watching |
+| `.git/**` | hooks execute on every clone and commit |
+| `package.json`, lockfiles, `pyproject.toml`, `requirements*.txt`, `Cargo.toml`, `go.mod` | decide what code runs next |
+| `*.sh`, `*.ps1`, `*.bat`, `*.cmd` | execute on other machines |
+| `Dockerfile`, `*.tf`, `k8s/**`, `Makefile` | provision or build real things |
+| `tsconfig.json`, `.eslintrc*`, `.babelrc`, `.prettierrc*` | change how everything else compiles |
+| binaries and `node_modules`-adjacent executables | not source |
+
+Provenance is **untrusted unless declared**. Forgetting to pass it disables
+nothing; passing `rule` is the only way to earn the exemption.
+
+A refusal does not discard the proposal. The finding is recorded as
+`requiresHuman` and emitted as `needs-human`, so the suggestion still reaches
+you with an explanation of why it was not applied.
+
 ## Autonomy, and what it will never do
 
 You asked for fully autonomous, so that is the default. Autonomous is safe here only

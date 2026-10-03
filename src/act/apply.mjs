@@ -59,7 +59,9 @@ export class Applier {
 
   /** Shared guard + autonomy gate. Returns a refusal/skip result, or null to proceed. */
   #gate(action, ctx) {
-    const guardResult = isRefused(action, { projectRoot: this.projectRoot, cwd: ctx.cwd });
+    // source is forwarded, not dropped: the file-class policy only applies to
+    // model-proposed edits, and dropping it here would silently disable it.
+    const guardResult = isRefused(action, { projectRoot: this.projectRoot, cwd: ctx.cwd, source: ctx.source });
     if (!guardResult.ok) {
       const d = describeRefusal(guardResult.code);
       log.warn(`refused ${action.kind}: ${guardResult.why}`);
