@@ -38,7 +38,6 @@ export function effectivePsProfile() {
 
 /** Works for both PowerShell 5.1 and pwsh 7. */
 export const buildProfileBlock = (nodeExe) => String.raw`${BEGIN}
-$env:WD_DISABLE = $null
 $__wdRoot = Join-Path $env:USERPROFILE '.watchdog'
 $__wdBin  = Join-Path $__wdRoot 'bin'
 try {

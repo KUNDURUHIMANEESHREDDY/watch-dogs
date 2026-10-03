@@ -13,7 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBashBlock, WRAPPER_SH } from '../src/install/install.mjs';
+import { buildBashBlock, buildProfileBlock, WRAPPER_SH, HOOK_PS1 } from '../src/install/install.mjs';
 
 const block = buildBashBlock();
 
@@ -87,6 +87,32 @@ test('the wrapper creates the transcript before exporting it', () => {
 
 test('the wrapper honours WD_TRANSCRIPT_DIR like every other consumer', () => {
   assert.match(WRAPPER_SH, /WD_TRANSCRIPT_DIR/);
+});
+
+// ------------------------------------------------------------------- opt-out
+
+test('neither profile block clears WD_DISABLE before reading it', () => {
+  // The documented opt-out was destroyed by the very block meant to honour it.
+  // PowerShell reset it to $null on line 1; bash exported it empty. Both then
+  // went on to test a variable they had just wiped, so `WD_DISABLE=1` captured
+  // everything anyway. A safety control that silently does nothing is worse than
+  // an absent one, because it is documented as working.
+  const ps = buildProfileBlock('C:/node/node.exe');
+  assert.ok(
+    !/\$env:WD_DISABLE\s*=\s*\$null/.test(ps),
+    'the PowerShell block resets WD_DISABLE to $null before anything reads it',
+  );
+  assert.ok(
+    !/^\s*export\s+WD_DISABLE=\s*$/m.test(block),
+    'the bash block clears WD_DISABLE before anything reads it',
+  );
+});
+
+test('both blocks actually test the opt-out rather than just mentioning it', () => {
+  const ps = buildProfileBlock('C:/node/node.exe');
+  assert.match(ps, /if \(-not \$env:WD_DISABLE\)/, 'the PowerShell block does not check WD_DISABLE');
+  assert.match(block, /if \[ -n "\$WD_DISABLE" \]/, 'the bash block does not check WD_DISABLE');
+  assert.match(HOOK_PS1, /if \(\$env:WD_DISABLE\) \{ return \}/, 'the PowerShell hook does not check WD_DISABLE');
 });
 
 // ------------------------------------------------------- redaction boundary
