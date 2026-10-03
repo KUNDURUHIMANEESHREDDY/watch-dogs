@@ -46,6 +46,9 @@ export const DEFAULTS = Object.freeze({
     },
     cooldownMs: 15_000, // per-signature, stops a looping build spamming the LLM
     maxFindingsPerSession: 200,
+    // Cap on findings.jsonl before it is rotated aside. Sized for records rather
+    // than diagnostics; one previous generation is kept.
+    maxFindingsBytes: 16 * 1024 * 1024,
   },
   // LLM observability. Off unless credentials are present, and it can never
   // affect a finding: telemetry failing must not change what the watchdog does.

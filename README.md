@@ -401,7 +401,8 @@ wd scan <file>          analyse a log    wd journal / wd rollback <id>
       "minSeverity": "medium",
       "maxInvocationsPerSession": 2
     },
-    "cooldownMs": 15000     // per-signature, so a looping build cannot spam the LLM
+    "cooldownMs": 15000,    // per-signature, so a looping build cannot spam the LLM
+    "maxFindingsBytes": 16777216  // findings.jsonl rotates past this, keeping one generation
   },
   "tracing": {
     "enabled": false,

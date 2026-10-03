@@ -463,12 +463,21 @@ function cmdStatus() {
 
 function loadFindingsFile(cfg) {
   const p = join(cfg.paths.data, 'findings.jsonl');
-  if (!existsSync(p)) return [];
-  return readFileSync(p, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-    .filter(Boolean);
+  // Read the rotated generation too. The log is capped, so ignoring findings.jsonl.1
+  // would make rotation look like data loss to anyone checking whether a fix ran.
+  const out = [];
+  for (const f of [p + '.1', p]) {
+    if (!existsSync(f)) continue;
+    for (const line of readFileSync(f, 'utf8').split('\n')) {
+      if (!line) continue;
+      try {
+        out.push(JSON.parse(line));
+      } catch {
+        /* a torn final line from a rotation mid-write; skip it */
+      }
+    }
+  }
+  return out;
 }
 
 function cmdFindings(flags) {

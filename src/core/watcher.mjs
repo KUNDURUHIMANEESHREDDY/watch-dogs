@@ -3,7 +3,7 @@
  * autonomy. Capture layers feed it lines; it is the only thing that decides.
  */
 import { EventEmitter } from 'node:events';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, statSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { evaluate, severityAtLeast, SEVERITY } from '../analyze/rules.mjs';
 import { Advisor } from '../analyze/advisor.mjs';
@@ -39,6 +39,40 @@ const ADVISOR_DOWN = new Set(['unavailable', 'timeout', 'failed', 'unparseable']
  */
 const MAX_TRACKED_BUDGET_SESSIONS = 500;
 
+/**
+ * Default cap on the findings log, before rotation.
+ *
+ * Larger than the daemon log's 2MB, because findings are records rather than
+ * diagnostics: one previous generation is kept so a rotation does not silently
+ * erase the recent history, and the safety-critical before/after for any applied
+ * fix lives in the journal, not here.
+ *
+ * Overridable via analyze.maxFindingsBytes, which is also how the tests reach
+ * rotation without writing 16MB to disk.
+ */
+const DEFAULT_MAX_FINDINGS_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Move `path` aside to `path.1`, replacing any previous generation.
+ *
+ * Rotation must never be able to stop the daemon recording findings, so every
+ * failure here is swallowed: the worst case is a log that grew too large, which is
+ * the situation we started in.
+ */
+function rotateFile(path) {
+  try {
+    const prev = path + '.1';
+    try {
+      if (existsSync(prev)) unlinkSync(prev);
+    } catch {
+      /* best effort */
+    }
+    renameSync(path, prev);
+  } catch (e) {
+    log.debug('findings log rotation failed: ' + e.message);
+  }
+}
+
 export function looksLikeError(line) {
   if (NOT_AN_ERROR.test(line)) return false;
   return ERROR_SHAPE.test(line);
@@ -55,6 +89,7 @@ export class Watcher extends EventEmitter {
   // terminal got silence -- the opposite of what maxInvocationsPerSession says.
   #llmBudget = new Map();
   #findingsPath;
+  #bytesAtLastCheck = null;
   #advisorWarned = false;
 
   constructor(cfg) {
@@ -290,10 +325,44 @@ export class Watcher extends EventEmitter {
     );
     if (i !== -1) this.#findings[i] = rec;
     try {
-      appendFileSync(this.#findingsPath, JSON.stringify(rec) + '\n');
+      const line = JSON.stringify(rec) + '\n';
+      this.#appendFindings(line);
     } catch (e) {
       log.warn('could not persist finding', e);
     }
+  }
+
+  /**
+   * Append to the findings log, rotating it when it grows past the cap.
+   *
+   * The in-memory findings list is already trimmed, so this was the only thing on
+   * disk that grew without bound. Two consequences beyond disk: `wd findings`
+   * reads and JSON-parses the entire file on every call, so an uncapped log made
+   * that slower and more memory-hungry for as long as the daemon ran.
+   *
+   * Size is tracked in memory rather than stat()ing on every append, because
+   * #record is called several times per finding as it moves from pending to acted.
+   */
+  #appendFindings(line) {
+    if (this.#bytesAtLastCheck === null) {
+      try {
+        this.#bytesAtLastCheck = statSync(this.#findingsPath).size;
+      } catch {
+        this.#bytesAtLastCheck = 0;
+      }
+    }
+    const bytes = Buffer.byteLength(line);
+    if (this.#bytesAtLastCheck + bytes > this.#maxFindingsBytes()) {
+      rotateFile(this.#findingsPath);
+      this.#bytesAtLastCheck = 0;
+    }
+    appendFileSync(this.#findingsPath, line);
+    this.#bytesAtLastCheck += bytes;
+  }
+
+  #maxFindingsBytes() {
+    const configured = Number(this.#cfg.analyze?.maxFindingsBytes);
+    return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_FINDINGS_BYTES;
   }
 
   findings(filter = {}) {
