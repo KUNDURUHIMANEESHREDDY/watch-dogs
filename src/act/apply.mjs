@@ -158,7 +158,7 @@ export class Applier {
     const root = ctx.cwd ?? this.projectRoot;
     const argv =
       action.kind === 'install-deps'
-        ? installArgv(action.package, root)
+        ? installArgv(action.package, root, action.ecosystem)
         : action.kind === 'repair-deps'
           ? repairArgv(root)
           : action.argv;
@@ -167,7 +167,7 @@ export class Applier {
         status: 'skipped',
         why:
           action.kind === 'install-deps'
-            ? explainInstallRefusal(action.package, ctx.cwd ?? this.projectRoot)
+            ? explainInstallRefusal(action.package, ctx.cwd ?? this.projectRoot, action.ecosystem)
             : action.kind === 'repair-deps'
               ? 'refused to repair node_modules automatically: this project has no lockfile, so npm install would re-resolve every dependency and could pull versions you never pinned. Commit a lockfile, or run the install yourself.'
               : 'no command to run',
@@ -284,10 +284,28 @@ function ctx2cwd(ctx) {
  * re-resolves and can silently fetch a newer -- possibly malicious -- version than
  * the one your lockfile records.
  */
-function installArgv(pkg, root) {
+/**
+ * Exported for tests.
+ *
+ * The routing decision is the whole point and it cannot be observed from outside
+ * without executing an installer, which a test must not do. Callers should use
+ * Applier; this exists so the argv can be inspected, never run.
+ */
+export function installArgv(pkg, root, ecosystem) {
   if (!pkg) return [];
 
-  if (!isDeclared(root, pkg)) return []; // the allowlist gate; caller explains
+  // The ecosystem is declared by the rule that recognised the error, and it is
+  // required. Guessing it is the bug this replaces: package.json was checked
+  // first, so a ModuleNotFoundError in a mixed project ran `npm install <name>`
+  // and the npm registry served a package that merely shares the name.
+  //
+  // An unrecognised or missing ecosystem therefore refuses rather than defaulting
+  // to Node. Both registries host packages with the same names, so "which one" is
+  // not a detail -- and defaulting would put the failure back with a shrug.
+  if (ecosystem === "python") return pythonInstallArgv(pkg, root);
+  if (ecosystem !== "node") return [];
+
+  if (!isDeclared(root, pkg, "node")) return []; // the allowlist gate; caller explains
 
   const lock = lockfileKind(root);
   if (lock === "pnpm") return ["pnpm", "install", "--frozen-lockfile"];
@@ -296,10 +314,20 @@ function installArgv(pkg, root) {
 
   // No lockfile: fall back to the declared package, still allowlisted.
   if (existsSync(join(root, "package.json"))) return ["npm", "install", pkg];
+  return [];
+}
+
+/**
+ * Python installs go through a virtual environment and pip, never a Node package
+ * manager. Without a recognised venv there is nothing safe to do automatically:
+ * a global `pip install` mutates the interpreter rather than the project, so the
+ * action is refused and the user is told what to run.
+ */
+function pythonInstallArgv(pkg, root) {
+  if (!isDeclared(root, pkg, "python")) return []; // declared as a python dependency, or not at all
 
   for (const venv of [".venv", "venv", "env"]) {
-    const exe =
-      process.platform === "win32" ? join(venv, "Scripts", "python.exe") : join(venv, "bin", "python");
+    const exe = process.platform === "win32" ? join(venv, "Scripts", "python.exe") : join(venv, "bin", "python");
     if (existsSync(join(root, venv)) && existsSync(join(root, exe))) {
       return [join(root, exe), "-m", "pip", "install", pkg];
     }
@@ -312,16 +340,37 @@ function installArgv(pkg, root) {
  * case is "not a declared dependency", because that is the supply-chain guard
  * firing and it should read as a deliberate decision rather than a bug.
  */
-function explainInstallRefusal(pkg, root) {
+function explainInstallRefusal(pkg, root, ecosystem) {
   const name = String(pkg ?? '').trim();
   if (!name) return 'no package name was identified in the output';
 
-  if (!isDeclared(root, name)) {
+  // Ecosystem-scoped now. "Declared somewhere in this repo" is not consent to
+  // install from a different ecosystem's registry.
+  const manifest = ecosystem === 'python' ? 'requirements.txt / pyproject.toml' : 'package.json';
+
+  if (ecosystem !== 'python' && ecosystem !== 'node') {
     return (
-      'refused to install "' + name + '": it is not a declared dependency of this project. ' +
+      'refused to install "' + name + '": the action did not say which ecosystem it belongs to. ' +
+      'Both registries host packages with the same names, so guessing would risk installing a ' +
+      'different package than the one that failed.'
+    );
+  }
+
+  if (!isDeclared(root, name, ecosystem)) {
+    const elsewhere = ecosystem === 'python' ? '' : isDeclared(root, name, 'python') ? ' (it is declared in requirements.txt, which is a different registry)' : '';
+    return (
+      'refused to install "' + name + '"' + elsewhere + ': it is not a declared ' +
+      (ecosystem === 'python' ? 'Python' : 'Node') + ' dependency of this project. ' +
       'The package name comes from terminal output, which any build tool or postinstall script can influence, ' +
-      'so only packages you have already declared are installed automatically. ' +
-      'Add it to package.json / requirements.txt yourself, or run the install by hand.'
+      'so only packages you have already declared, in the ecosystem that failed, are installed automatically. ' +
+      'Add it to ' + manifest + ' yourself, or run the install by hand.'
+    );
+  }
+
+  if (ecosystem === 'python') {
+    return (
+      'refused to install "' + name + '" automatically: it is declared, but no project virtualenv (.venv) exists, ' +
+      'so pip would have to modify a global interpreter. Create a venv, or install it yourself.'
     );
   }
 
@@ -335,8 +384,7 @@ function explainInstallRefusal(pkg, root) {
     );
   }
   return (
-    'refused to install "' + name + '" automatically: it is declared, but no project virtualenv (.venv) exists, ' +
-    'so pip would have to modify a global interpreter. Create a venv, or install it yourself.'
+    'refused to install "' + name + '" automatically: it is declared as a Node dependency, but this project has no package.json. Run it yourself.'
   );
 }
 export function unifiedDiff(before, after, path = 'file') {

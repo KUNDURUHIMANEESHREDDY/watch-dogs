@@ -130,6 +130,17 @@ or `pyproject.toml` (PEP 621 and Poetry), and it is authored by you rather than 
 a build log. It **fails closed** -- an unreadable or unrecognised manifest means
 "install nothing".
 
+**Declarations do not cross ecosystems.** Both registries host packages with the
+same names, so a name declared in `requirements.txt` does not authorise an npm
+install. The rule that recognised the error declares which ecosystem failed, and
+the executor honours it rather than inferring one from the project layout.
+
+That inference is the bug this replaces: a project with both `package.json` and
+`requirements.txt` had `package.json` checked first, so
+`ModuleNotFoundError: No module named 'requests'` ran `npm install requests` --
+fetching the unrelated npm package of that name. No attacker needed, just a mixed
+repo. An action with no ecosystem now installs nothing at all.
+
 Two further consequences:
 
 - **Python installs target a project `.venv` only.** No venv means no install, so a

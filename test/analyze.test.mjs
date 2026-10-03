@@ -297,7 +297,8 @@ test('never installs into a global interpreter without a project venv', async ()
   // Declared, so the allowlist passes; only the venv gate can stop this.
   writeFileSync(join(root, 'requirements.txt'), 'requests>=2.31.0\n');
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
-  const r = await a.applyAsync({ kind: 'install-deps', package: 'requests' }, { cwd: root });
+  // ecosystem is what the python-modulenotfound rule emits.
+  const r = await a.applyAsync({ kind: 'install-deps', package: 'requests', ecosystem: 'python' }, { cwd: root });
   assert.equal(r.status, 'skipped', JSON.stringify(r));
   assert.match(r.why, /global interpreter/);
 });
@@ -307,11 +308,25 @@ test('the allowlist is checked before anything else', async () => {
   const data = join(root, '.watchdog');
   mkdirSync(data, { recursive: true });
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
-  const r = await a.applyAsync({ kind: 'install-deps', package: 'requests' }, { cwd: root });
+  const r = await a.applyAsync({ kind: 'install-deps', package: 'requests', ecosystem: 'node' }, { cwd: root });
   assert.equal(r.status, 'skipped');
   // The allowlist is the outer gate: an undeclared package is refused even when
   // the reason the older code would have given (no venv) also applies.
-  assert.match(r.why, /not a declared dependency/);
+  assert.match(r.why, /not a declared Node dependency/);
+});
+
+test('an install with no ecosystem is refused rather than guessed', async () => {
+  // Both registries host packages with the same names, so defaulting the
+  // ecosystem is not a neutral choice -- it is the original bug with a shrug.
+  const root = tmp();
+  const data = join(root, '.watchdog');
+  mkdirSync(data, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { requests: '^1.0.0' } }));
+  writeFileSync(join(root, 'requirements.txt'), 'requests>=2.31.0\n');
+  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
+  const r = await a.applyAsync({ kind: 'install-deps', package: 'requests' }, { cwd: root });
+  assert.equal(r.status, 'skipped');
+  assert.match(r.why, /did not say which ecosystem/);
 });
 
 test('targets a project virtualenv when one exists', async () => {

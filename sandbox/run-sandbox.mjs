@@ -165,7 +165,10 @@ const SCENARIOS = [
 
       const r = await a.applyAsync(f.fix, { cwd: SANDBOX });
       check('an undeclared package is NOT installed', r.status === 'skipped', JSON.stringify(r));
-      check('the refusal explains the allowlist', /not a declared dependency/.test(r.why ?? ''), r.why);
+      // Matched loosely on purpose: the message names the ecosystem now ("not a
+  // declared Node dependency"), and pinning the exact wording would make every
+  // improvement to the explanation look like a regression.
+  check('the refusal explains the allowlist', /not a declared/.test(r.why ?? ''), r.why);
 
       const installed = existsSync(join(SANDBOX, 'node_modules', 'evil-pkg'));
       check('nothing landed in node_modules', !installed);

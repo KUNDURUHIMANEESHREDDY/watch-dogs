@@ -49,7 +49,7 @@ test('the exact attack from the report is refused', async () => {
 
   const r = await a.applyAsync(finding.fix, { cwd: root });
   assert.equal(r.status, 'skipped', JSON.stringify(r));
-  assert.match(r.why, /not a declared dependency/);
+  assert.match(r.why, /not a declared/);
 });
 
 test('a declared dependency is still installed automatically', async () => {
@@ -76,7 +76,7 @@ test('a python package absent from requirements.txt is refused', async () => {
   const finding = evaluate("ModuleNotFoundError: No module named 'evil'")[0];
   const r = await a.applyAsync(finding.fix, { cwd: root });
   assert.equal(r.status, 'skipped');
-  assert.match(r.why, /not a declared dependency/);
+  assert.match(r.why, /not a declared/);
 });
 
 /**
@@ -93,9 +93,12 @@ test('an undeclared package is refused even when a usable venv exists', async ()
   writeFileSync(join(scripts, process.platform === 'win32' ? 'python.exe' : 'python'), '');
 
   const a = applierFor(root);
-  const r = await a.applyAsync({ kind: 'install-deps', package: 'evil' }, { cwd: root });
+  // ecosystem: 'python' because that is what python-modulenotfound emits, and
+  // this test is about the allowlist gate -- not about the ecosystem check that
+  // now runs ahead of it.
+  const r = await a.applyAsync({ kind: 'install-deps', package: 'evil', ecosystem: 'python' }, { cwd: root });
   assert.equal(r.status, 'skipped', 'must refuse even though the venv would have worked');
-  assert.match(r.why, /not a declared dependency/);
+  assert.match(r.why, /not a declared/);
   // Nothing may have been executed.
   assert.equal(a.listJournal().filter((j) => j.outcome === 'ok').length, 0);
 });
@@ -107,9 +110,9 @@ test('an undeclared package is refused even in a project with a lockfile', async
   });
   const a = applierFor(root);
   // The lockfile makes the repair path look attractive; it must not bypass the gate.
-  const r = await a.applyAsync({ kind: 'install-deps', package: 'evil-pkg' }, { cwd: root });
+  const r = await a.applyAsync({ kind: 'install-deps', package: 'evil-pkg', ecosystem: 'node' }, { cwd: root });
   assert.equal(r.status, 'skipped');
-  assert.match(r.why, /not a declared dependency/);
+  assert.match(r.why, /not a declared/);
 });
 
 test('python requirement formats are all recognised', () => {

@@ -23,7 +23,7 @@ export const RULES = [
   R('node-module-missing', 'critical', (l) => /Cannot find module '([^']+)'/.exec(l), {
     title: 'Dependency missing',
     explain: 'Node cannot resolve a required module, so the process cannot start.',
-    fix: { kind: 'install-deps', package: '$1' },
+    fix: { kind: 'install-deps', package: '$1', ecosystem: 'node' },
   }),
   R('npm-install-failed', 'high', (l) => /^npm (?:ERR!|error)\s+code\s+(E\w+)/.exec(l), {
     title: 'npm install failed',
@@ -36,7 +36,10 @@ export const RULES = [
   R('python-modulenotfound', 'critical', (l) => /ModuleNotFoundError: No module named '([^']+)'/.exec(l), {
     title: 'Python dependency missing',
     explain: 'The interpreter cannot import a required module.',
-    fix: { kind: 'install-deps', package: '$1' },
+    // ecosystem matters, and not as metadata. Without it a Python import error in a
+    // project that also has a package.json ran `npm install <name>`, installing an
+    // unrelated package from a different registry that merely shares the name.
+    fix: { kind: 'install-deps', package: '$1', ecosystem: 'python' },
   }),
   // Anchored deliberately. An earlier version matched any line *containing*
   // "error TS123:", which fired on echoed commands and transcript headers --

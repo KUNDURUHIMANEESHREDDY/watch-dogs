@@ -131,13 +131,34 @@ function pyprojectDeclared(pkg) {
   return out;
 }
 
+/** Which manifest declares what, by ecosystem. */
+export const ECOSYSTEMS = Object.freeze({
+  node: 'node',
+  python: 'python',
+});
+
+const DECLARERS = {
+  node: [npmDeclared],
+  python: [requirementsDeclared, pyprojectDeclared],
+};
+
 /**
- * Every package the project has already declared, across every ecosystem present.
+ * Every package the project has already declared.
+ *
+ * With no ecosystem, this is the union across manifests. That union is fine for
+ * asking "has this project ever heard of X" and dangerous for authorising an
+ * install: in a mixed project the name `requests` appears in requirements.txt,
+ * which made an npm install of the unrelated npm package `requests` look
+ * declared. Callers that are about to *install* must pass an ecosystem.
+ *
+ * @param {string} [ecosystem] 'node' | 'python', or omitted for the union
  * @returns {Set<string>} normalised names
  */
-export function declaredPackages(root) {
+export function declaredPackages(root, ecosystem) {
+  const fns = ecosystem ? DECLARERS[ecosystem] : [npmDeclared, requirementsDeclared, pyprojectDeclared];
+  if (!fns) return new Set(); // unknown ecosystem: declare nothing, fail closed
   const names = new Set();
-  for (const fn of [npmDeclared, requirementsDeclared, pyprojectDeclared]) {
+  for (const fn of fns) {
     try {
       for (const n of fn({ root })) names.add(n);
     } catch {
@@ -147,10 +168,10 @@ export function declaredPackages(root) {
   return names;
 }
 
-export function isDeclared(root, rawName) {
+export function isDeclared(root, rawName, ecosystem) {
   const n = normalizePkgName(rawName);
   if (!n) return false;
-  return declaredPackages(root).has(n);
+  return declaredPackages(root, ecosystem).has(n);
 }
 
 /** True when the project pins versions, so repairing should honour the lockfile. */
