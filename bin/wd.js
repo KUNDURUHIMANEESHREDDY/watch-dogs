@@ -10,7 +10,7 @@ import { listRails } from '../src/act/guard.mjs';
 import { Applier } from '../src/act/apply.mjs';
 import { install, uninstall, effectivePsProfile } from '../src/install/install.mjs';
 import { LineSplitter } from '../src/capture/stream.mjs';
-import { Heartbeat, readHeartbeat, claimSingleton } from '../src/core/heartbeat.mjs';
+import { Heartbeat, readHeartbeat, claimSingleton, releaseSingleton } from '../src/core/heartbeat.mjs';
 import { installAutostart, removeAutostart, autostartStatus, coverageVerdict } from '../src/install/autostart.mjs';
 import { resolveTracing } from '../src/observe/trace.mjs';
 import { homedir } from 'node:os';
@@ -146,6 +146,19 @@ function cmdStart(flags) {
     return;
   }
   const beat = new Heartbeat(cfg.paths.data, { projectRoot: cfg.projectRoot, toolRoot: TOOL_ROOT, autonomy: cfg.autonomy }).start();
+
+  // Release on a clean exit so the next start does not have to wait for the
+  // pid-liveness check to discover the corpse. releaseSingleton verifies the
+  // token first, so a daemon whose lock was taken over cannot delete the new
+  // holder's on its way out.
+  const releaseLock = () => releaseSingleton(claim.lockPath, claim.token);
+  process.once('exit', releaseLock);
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.once(sig, () => {
+      releaseLock();
+      process.exit(0);
+    });
+  }
   log.info(
     'daemon starting: pid=' + process.pid +
       ' node=' + process.version +

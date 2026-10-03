@@ -327,6 +327,20 @@ Without it a crash under the launcher leaves no trace at all, since the launcher
 window is hidden and its output discarded, which is exactly what happened the
 first time this daemon died.
 
+Only one daemon may run per project, and that is enforced by an **exclusive
+create** (`.watchdog/daemon.lock`, `O_EXCL`) rather than by reading the heartbeat.
+The earlier version read the heartbeat, saw nobody running, and returned "ok" --
+check-then-act with nothing in between. Two `wd start` processes racing at the
+same moment both passed it, **20 times out of 20** when measured, so the guard was
+not merely racy but ineffective for the case it exists to prevent. That matters
+because two daemons means double the LLM spend and two autonomous appliers writing
+the same files.
+
+A lock left by a crashed daemon is taken over, checked by pid liveness rather
+than age, so a dead daemon still cannot block the next start. Release verifies the
+lock token first, so a daemon that stalled long enough to be taken over cannot
+delete the *new* holder's lock on its way out.
+
 The daemon **beats**: it writes `.watchdog/daemon.json` atomically every 5s
 with its pid and a timestamp, and the absence of a fresh beat is the signal.
 

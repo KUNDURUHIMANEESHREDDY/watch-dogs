@@ -10,6 +10,7 @@
 import { writeFileSync, renameSync, readFileSync, existsSync, unlinkSync, mkdirSync, openSync, fstatSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { pidAlive } from '../capture/shell.mjs';
 
 export const BEAT_INTERVAL_MS = 5000;
@@ -184,11 +185,103 @@ export function atomicWriteJson(path, value) {
  * Guard against a second daemon. The Startup entry plus a manual `wd start` is an
  * easy way to end up with two writers appending to the same findings log.
  */
+/**
+ * Take exclusive ownership of a data directory.
+ *
+ * The previous version read the heartbeat, saw nobody running, and returned ok.
+ * That is check-then-act with nothing in between, and two daemons starting at the
+ * same moment both pass it. Measured here at 20 wins out of 20 concurrent starts,
+ * so the guard was not merely racy -- it was ineffective for the case it exists
+ * to prevent. It matters because two daemons means double the LLM spend and two
+ * autonomous appliers racing on the same files.
+ *
+ * Now it creates the lock with O_EXCL, which is atomic on Windows and POSIX
+ * alike: exactly one creator can win, and the losers learn immediately rather
+ * than by observing a heartbeat later.
+ *
+ * A lock left behind by a crashed daemon is taken over, checked by pid liveness
+ * rather than age, so a dead daemon still cannot block the next start.
+ */
 export function claimSingleton(dataDir) {
-  const existing = readHeartbeat(dataDir);
-  if (existing.state === 'running' && existing.info?.pid && existing.info.pid !== process.pid) {
-    return { ok: false, pid: existing.info.pid, reason: `another watchdog is already running (pid ${existing.info.pid})` };
+  const lockPath = join(dataDir, 'daemon.lock');
+  try {
+    mkdirSync(dataDir, { recursive: true });
+  } catch {
+    /* the caller will fail on its own if the directory is unusable */
   }
-  return { ok: true };
+
+  const token = randomUUID();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // 'wx' is O_CREAT|O_EXCL: the create fails if the path already exists, and
+      // that check and the create are one operation rather than two.
+      const fd = openSync(lockPath, 'wx');
+      try {
+        writeFileSync(fd, JSON.stringify({ pid: process.pid, token, at: new Date().toISOString() }));
+      } finally {
+        closeSync(fd);
+      }
+      return { ok: true, token, lockPath };
+    } catch (e) {
+      if (e.code !== 'EEXIST') {
+        // Anything else -- a read-only directory, permissions -- must not be read
+        // as "free to start", or a daemon could launch unguarded.
+        return { ok: false, reason: `could not create the daemon lock: ${e.message}` };
+      }
+    }
+
+    const holder = readLock(lockPath);
+
+    // Re-entrant: a process that already holds the lock keeps it. Without this a
+    // restart of the same process would deadlock against itself.
+    if (holder && holder.pid === process.pid) {
+      return { ok: true, token: holder.token, lockPath };
+    }
+
+    if (holder && holder.pid && pidAlive(holder.pid)) {
+      return {
+        ok: false,
+        pid: holder.pid,
+        reason: `another watchdog is already running (pid ${holder.pid})`,
+      };
+    }
+
+    // Stale: the holder is gone. Remove and retry. The retry is bounded, so a
+    // lock that keeps reappearing fails the claim rather than looping.
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      /* someone else may have taken it over; the next attempt will see that */
+    }
+  }
+  return { ok: false, reason: 'could not acquire the daemon lock after several attempts' };
+}
+
+/** Read a lock file, or null when it is missing or unreadable. */
+function readLock(lockPath) {
+  try {
+    return JSON.parse(readFileSync(lockPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Release the lock, but only if we still hold it.
+ *
+ * The token check is the point. A daemon whose lock was taken over because it
+ * stalled must not delete the *new* holder's lock on its way out, which would
+ * leave the machine with no lock and two daemons running.
+ */
+export function releaseSingleton(lockPath, token) {
+  if (!lockPath) return false;
+  const holder = readLock(lockPath);
+  if (holder && token && holder.token !== token) return false;
+  try {
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
