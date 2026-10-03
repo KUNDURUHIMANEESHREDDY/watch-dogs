@@ -18,6 +18,7 @@
     "daemon-test": "node sandbox/run-daemon-test.mjs",
     "daemon-test:live": "node sandbox/run-daemon-test.mjs",
     "langfuse-test": "node sandbox/run-langfuse-test.mjs",
+    "eval:fixes": "node sandbox/eval-fix-quality.mjs",
     "verify": "npm test && npm run sandbox"
   },
   "dependencies": {

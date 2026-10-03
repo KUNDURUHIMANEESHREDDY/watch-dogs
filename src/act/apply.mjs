@@ -5,8 +5,11 @@
  * Ordering: propose -> guard -> diff -> autonomy gate -> write -> journal.
  * The guard runs before anything touches the disk, not after.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, copyFileSync } from 'node:fs';
-import { join, dirname, resolve, relative, basename } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
+import { join, dirname, resolve, relative, basename, extname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
@@ -136,6 +139,21 @@ export class Applier {
       return { status: 'skipped', why: `"find" text is ambiguous (appears more than once) in ${action.path}` };
     }
     const after = before.slice(0, idx) + action.replace + before.slice(idx + action.find.length);
+
+    // The anchor being present says nothing about the result being code. Observed
+    // from the eval: the model proposed replacing the bare identifier `count`
+    // with `let count = 0;`, which matched cleanly and produced a file that does
+    // not parse. Applying that in autonomous mode breaks the user's source.
+    const verdict = syntaxVerdict(abs, after);
+    if (verdict === 'invalid') {
+      return {
+        status: 'skipped',
+        why:
+          `the edit would leave ${action.path} unparseable, so it was not applied. ` +
+          'The replacement text did not fit the place the anchor was found.',
+      };
+    }
+
     this.#snapshot(abs);
     this.#write(abs, after);
     return this.#journal({ type: 'patch', abs, before, after, ctx, action });
@@ -291,6 +309,40 @@ function ctx2cwd(ctx) {
  * without executing an installer, which a test must not do. Callers should use
  * Applier; this exists so the argv can be inspected, never run.
  */
+export /** Extensions node can parse on its own. Anything else is not our judgement to make. */
+const CHECKABLE = new Set(['.js', '.mjs', '.cjs', '.jsx']);
+
+/**
+ * Would this content parse as JavaScript?
+ *
+ * @returns {'valid'|'invalid'|'unknown'} 'unknown' when the file is not something
+ *   we can check, or when the checker itself failed. An unknown never blocks a
+ *   fix: refusing everything we cannot verify would block every TypeScript edit.
+ */
+function syntaxVerdict(absPath, contents) {
+  if (!CHECKABLE.has(extname(absPath).toLowerCase())) return 'unknown';
+  let tmp = null;
+  try {
+    tmp = join(tmpdir(), `wd-syntax-${process.pid}-${randomBytes(4).toString('hex')}${extname(absPath)}`);
+    writeFileSync(tmp, contents, 'utf8');
+    execFileSync(process.execPath, ['--check', tmp], { timeout: 20_000, stdio: ['ignore', 'ignore', 'pipe'] });
+    return 'valid';
+  } catch (e) {
+    // A non-zero exit is the answer we want. A missing node or a spawn failure is
+    // not, and must not be read as "invalid".
+    if (e && typeof e.status === 'number') return 'invalid';
+    return 'unknown';
+  } finally {
+    if (tmp) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+}
+
 export function installArgv(pkg, root, ecosystem) {
   if (!pkg) return [];
 

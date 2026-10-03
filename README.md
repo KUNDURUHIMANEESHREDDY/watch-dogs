@@ -275,6 +275,47 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## What the model is actually good at
+
+The sandbox asserts a proposed edit is "applied or safely refused", which passes
+whether the fix was right or the rails blocked it. So it measures the rails and
+calls it fix quality. Nothing checked whether a suggestion was *correct*.
+
+`npm run eval-fix-quality` does. It reports three things that fail independently,
+over N repeats, against a corpus with known ground truth:
+
+```
+sandbox/eval-fix-quality.mjs      # WD_REPEATS=5 for a tighter read
+```
+
+| Measured over 5 runs | Result |
+|---|---|
+| **triage** (problem vs noise) | **20/20 correct** |
+| fix proposed at all | 20-40% |
+| of those, anchor applicable | now 100% after path resolution |
+| of those, fix actually worked | 20-100%, varying by case |
+
+Three things worth knowing:
+
+**Triage is the reliable part.** Perfect classification across every case,
+including correctly staying silent on a successful build. Whatever else is
+uncertain, the model is good at deciding whether something is wrong.
+
+**The model cannot see the file tree**, so it answers with bare basenames --
+`tally.js` for `src/tally.js`. Roughly half of all proposed fixes were being
+dropped for that alone. Paths are now resolved when exactly one file has that
+name; ambiguity leaves the path alone rather than guessing, because picking
+wrongly would edit the wrong file.
+
+**A patch can apply perfectly and still be wrong.** The eval found the model
+replacing the bare identifier `count` with `let count = 0;`: the anchor matched,
+every existing check passed, the file was written, and the result did not parse.
+"Anchored text was present" is not evidence that "the result is code". Patches to
+JavaScript are now parsed before they are written.
+
+The eval reports rather than gates. The model is non-deterministic -- identical
+prompts give different verdicts -- so a single-sample pass/fail would be theatre.
+
 ## Sandbox
 
 An isolated project with deliberately broken code, plus two harnesses that run the

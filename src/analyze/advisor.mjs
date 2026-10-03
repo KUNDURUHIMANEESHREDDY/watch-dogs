@@ -7,6 +7,8 @@
 import { runCapture, makeRunnable, assertSafeArg } from '../core/exec.mjs';
 import { log } from '../core/log.mjs';
 import { traceAdvisorReview } from '../observe/trace.mjs';
+import { existsSync, readdirSync } from 'node:fs';
+import { join, resolve, relative, basename, sep } from 'node:path';
 
 const SYSTEM_PROMPT = `You are a build-log triage assistant. Given terminal output, decide whether there is a real, actionable problem.
 
@@ -89,7 +91,7 @@ export class Advisor {
       if (!parsed) {
         return { ...err('could not parse JSON from model output', 'unparseable'), raw: unwrapped.text.slice(0, 2000) };
       }
-      return normalize(parsed, raw);
+      return normalize(parsed, raw, cwd);
     } catch (e) {
       return err(e.message, e.message.includes('timed out') ? 'timeout' : 'failed');
     }
@@ -202,7 +204,7 @@ function providerError(envelope) {
   return { verdict: 'unsure', confidence: 0, summary: reason, fix: null, raw: '', status: `provider_${status ?? 'error'}`, error: reason };
 }
 
-function normalize(p, raw) {
+function normalize(p, raw, cwd) {
   const verdict = ['problem', 'noise', 'unsure'].includes(p.verdict) ? p.verdict : 'unsure';
   const confidence = typeof p.confidence === 'number' ? Math.max(0, Math.min(1, p.confidence)) : 0;
   let fix = null;
@@ -218,12 +220,71 @@ function normalize(p, raw) {
         if (p2.startsWith('/') || p2.startsWith('\\') || /^[A-Za-z]:/.test(p2)) return null; // absolute
         if (p2.split(/[\\/]/).includes('..')) return null; // traversal
         if (f.find === '' || f.find === f.replace) return null; // no-op
-        return { path: p2, find: f.find, replace: f.replace };
+        // The model does not see the file tree, so it routinely answers with a
+        // bare basename ("tally.js") for a file that actually lives at
+        // "src/tally.js". Measured on the sandbox corpus, roughly half the fixes
+        // it proposed were dropped purely because the path did not resolve.
+        const resolved = resolveProposedPath(p2, cwd);
+        return { path: resolved, proposedPath: p2, find: f.find, replace: f.replace };
       })
       .filter(Boolean);
     if (files.length) fix = { description: String(p.fix.description ?? 'proposed edit'), files };
   }
   return { verdict, confidence, summary: String(p.summary ?? ''), fix, raw: raw.slice(0, 2000) };
+}
+
+/** Directories never searched when hunting for a mis-pathed proposal. */
+const NEVER_SEARCHED = ['node_modules', 'dist', 'build', '.next', 'coverage'];
+
+/**
+ * Improve a path the model proposed, when it is safe to do so.
+ *
+ * This only ever *upgrades* a path. If the proposal already resolves, or exactly
+ * one file with that basename exists, that file is used. Otherwise the original
+ * is returned unchanged rather than the proposal being dropped -- because
+ * dropping it here would discard fixes whose target genuinely does not exist yet,
+ * and the applier already refuses a path that is not there. Ambiguity is left
+ * alone for the same reason: guessing between two files would apply a
+ * plausible-looking edit to the wrong code.
+ *
+ * Dotfiles and dependency directories are skipped; a match inside node_modules is
+ * never the target.
+ */
+export function resolveProposedPath(proposed, cwd) {
+  if (!cwd) return proposed;
+  const root = resolve(cwd);
+  if (existsSync(join(root, proposed))) return proposed;
+
+  const name = basename(proposed);
+  if (!name) return proposed;
+
+  const matches = [];
+  const walk = (dir, depth) => {
+    if (depth > 6 || matches.length > 1) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (matches.length > 1) return;
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (NEVER_SEARCHED.includes(e.name)) continue;
+        walk(full, depth + 1);
+      } else if (e.name === name) {
+        matches.push(relative(root, full));
+      }
+    }
+  };
+  walk(root, 0);
+
+  // Forward slashes regardless of platform. The model emits them, the rest of the
+  // config does, and a path that changes shape depending on who proposed it is
+  // harder to read in a journal than it is worth.
+  return matches.length === 1 ? matches[0].split(sep).join('/') : proposed;
 }
 
 function err(message, status = 'failed') {
