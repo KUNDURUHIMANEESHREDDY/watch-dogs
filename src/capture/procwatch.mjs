@@ -35,11 +35,15 @@ export class ProcessWatcher {
   #cfg;
   #timer = null;
   #seen = new Map(); // pid -> { name, startTime, cmd, reported }
+  #sessionCwd;
   #onFinding;
 
-  constructor(cfg, onFinding) {
+  constructor(cfg, onFinding, { sessionCwd } = {}) {
     this.#cfg = cfg;
     this.#onFinding = onFinding;
+    // pid -> cwd for shells we instrumented. Windows exposes no cwd through CIM,
+    // so this is what makes inheritance-based attribution possible.
+    this.#sessionCwd = typeof sessionCwd === 'function' ? sessionCwd : () => null;
   }
 
   start(intervalMs = 5000) {
@@ -97,17 +101,32 @@ export class ProcessWatcher {
     }
   }
 
-  #reconcile(procs) {
+  /**
+ * Reconcile a pre-fetched process list and return the newly tracked entries.
+ *
+ * Public so the attribution logic can be tested without shelling out to CIM on
+ * every case. Not part of the daemon's own flow -- poll() is the door.
+ */
+observe(procs) {
+  this.#reconcile(procs);
+  return [...this.#seen.values()];
+}
+
+#reconcile(procs) {
     const live = new Set();
+    // Built once per poll so parent-chain lookups do not rescan the list.
+    const byPid = new Map();
+    for (const p of procs) if (p.pid) byPid.set(p.pid, p);
+
     for (const p of procs) {
       if (!p.pid) continue;
       live.add(p.pid);
       if (this.#seen.has(p.pid)) continue;
       if (isOwnProcess(p.pid)) continue;
       if (!WORKLOAD.test(p.name) && !WORKLOAD.test(p.cmd.split(/\s+/)[0] ?? '')) continue;
-      if (!this.#relevant(p)) continue;
+      if (!this.#relevant(p, byPid)) continue;
       this.#seen.set(p.pid, { ...p, firstSeen: Date.now() });
-      log.debug(`procwatch tracking ${p.pid} ${p.name}`);
+      log.debug(`procwatch tracking ${p.pid} ${p.name}${p.cwd ? ` (cwd inherited: ${p.cwd})` : ''}`);
     }
 
     for (const [pid, rec] of this.#seen) {
@@ -123,12 +142,44 @@ export class ProcessWatcher {
    * server's node/python workers restarting is not the user's build failing,
    * and drowning real signal in that noise is how a monitor gets ignored.
    */
-  #relevant(p) {
+  #relevant(p, byPid) {
     if (this.#cfg.capture.layers.processAnywhere) return true;
     const root = (this.#cfg.projectRoot || '').toLowerCase();
     if (!root) return false;
     const hay = `${p.cmd ?? ''} ${p.cwd ?? ''}`.toLowerCase();
-    return hay.includes(root);
+    if (hay.includes(root)) return true;
+
+    // Windows does not expose a process's working directory through CIM -- there
+    // is no such property, verified against a process started with an explicit
+    // -WorkingDirectory whose command line contained no trace of it. So a bare
+    // `node server.js` in the project was invisible to this layer and every
+    // layer-2 finding depended on the project path appearing in argv.
+    //
+    // The cwd is still inferable: a child inherits its parent's working
+    // directory, and the session registry knows the cwd of every shell we
+    // instrumented. Walking up the parent chain recovers it for exactly the
+    // processes this layer exists to watch -- those started from a terminal.
+    const inherited = this.#inheritedCwd(p, byPid);
+    if (inherited) {
+      p.cwd = inherited;
+      return inherited.toLowerCase().includes(root);
+    }
+    return false;
+  }
+
+  /**
+   * Walk ParentProcessId upward looking for an ancestor whose working directory we
+   * know. Bounded, because a deep or cyclic chain must not spin the poll loop.
+   */
+  #inheritedCwd(p, byPid) {
+    if (!byPid) return null;
+    let cur = p;
+    for (let depth = 0; depth < 8 && cur?.ppid; depth++) {
+      const known = this.#sessionCwd(cur.ppid);
+      if (known) return known;
+      cur = byPid.get(cur.ppid);
+    }
+    return null;
   }
 
   #reportExit(rec) {

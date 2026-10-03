@@ -191,8 +191,27 @@ function cmdStart(flags) {
 
   let proc = null;
   if (cfg.capture.layers.process) {
-    proc = new ProcessWatcher(cfg, (f) => out(formatFinding(f))).start();
-    out(col('g', 'layer 2 on ') + 'process watcher (exit events)');
+    // Windows exposes no working directory through CIM, so layer 2 infers one by
+    // walking ParentProcessId up to a shell we instrumented and reusing the cwd
+    // the session registry recorded. Without this, a plain `node server.js` in the
+    // project was never recognised, because argv does not contain the path.
+    //
+    // The lookup is memoised for a second: it would otherwise re-read the whole
+    // sessions directory once per candidate process on every 5s poll.
+    let cwdCache = { at: 0, byPid: new Map() };
+    const sessionsByPid = () => {
+      if (Date.now() - cwdCache.at < 1000) return cwdCache.byPid;
+      const byPid = new Map();
+      for (const s of registry.list()) {
+        if (s.status === 'live' && s.pid && s.cwd) byPid.set(s.pid, s.cwd);
+      }
+      cwdCache = { at: Date.now(), byPid };
+      return byPid;
+    };
+    proc = new ProcessWatcher(cfg, (f) => out(formatFinding(f)), {
+      sessionCwd: (pid) => sessionsByPid().get(pid) ?? null,
+    }).start();
+    out(col('g', 'layer 2 on ') + 'process watcher (lifecycle, cwd inherited from sessions)');
   } else {
     out(col('d', 'layer 2 off') + ' process watcher');
   }

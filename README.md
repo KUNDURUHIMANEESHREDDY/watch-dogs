@@ -484,10 +484,22 @@ is not there.
   do report their exit code, because `runCapture` sees the `close` event on its
   own child. The absence is specific to externally started processes.
 
-- **Only processes whose command line references the project root are tracked** --
-  otherwise the layer reports the machine's own infrastructure, which is how a
-  monitor gets ignored. See the next item: on Windows this attribution is weaker
-  than it looks.
+- **Attribution on Windows works by inheritance, not by inspection.** There is no
+  working-directory property on `Win32_Process`, and the working directory appears
+  nowhere in `CommandLine` -- verified against a process started with an explicit
+  `-WorkingDirectory`. So layer 2 walks `ParentProcessId` upward looking for a
+  shell the session registry recorded a cwd for, and reuses that.
+
+  This recovers the common case -- `node server.js`, `npm test`, `pytest` started
+  from an instrumented terminal in the project -- which previously were **invisible**
+  because argv says nothing about where they run. Two limits: a process whose
+  ancestors were never instrumented still cannot be attributed, and a project
+  launched from an uninstrumented parent is only seen if the project path appears
+  in its command line.
+
+  The relevance filter still exists to avoid reporting the machine's own
+  infrastructure, which is how a monitor gets ignored. `processAnywhere` disables
+  it.
 - **Arbitrary `command` actions are still denylist-protected.** Dependency installs are
   allowlisted, but a rule or model proposal of some other shell command passes if it
   matches no known-bad pattern. Converting the remaining rails to an allowlist of
