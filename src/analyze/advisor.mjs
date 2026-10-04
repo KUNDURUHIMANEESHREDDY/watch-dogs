@@ -8,6 +8,7 @@ import { runCapture, makeRunnable, assertSafeArg } from '../core/exec.mjs';
 import { log } from '../core/log.mjs';
 import { traceAdvisorReview } from '../observe/trace.mjs';
 import { existsSync, readdirSync } from 'node:fs';
+import { traceTarget } from './tracepaths.mjs';
 import { join, resolve, relative, basename, sep } from 'node:path';
 
 const SYSTEM_PROMPT = `You are a build-log triage assistant. Given terminal output, decide whether there is a real, actionable problem.
@@ -91,7 +92,7 @@ export class Advisor {
       if (!parsed) {
         return { ...err('could not parse JSON from model output', 'unparseable'), raw: unwrapped.text.slice(0, 2000) };
       }
-      return normalize(parsed, raw, cwd);
+      return normalize(parsed, raw, cwd, evidence);
     } catch (e) {
       return err(e.message, e.message.includes('timed out') ? 'timeout' : 'failed');
     }
@@ -204,11 +205,15 @@ function providerError(envelope) {
   return { verdict: 'unsure', confidence: 0, summary: reason, fix: null, raw: '', status: `provider_${status ?? 'error'}`, error: reason };
 }
 
-function normalize(p, raw, cwd) {
+function normalize(p, raw, cwd, evidence) {
   const verdict = ['problem', 'noise', 'unsure'].includes(p.verdict) ? p.verdict : 'unsure';
   const confidence = typeof p.confidence === 'number' ? Math.max(0, Math.min(1, p.confidence)) : 0;
   let fix = null;
   if (verdict === 'problem' && p.fix && Array.isArray(p.fix.files)) {
+    // Resolved once per review, not once per proposed file: the trace names the
+    // throw site, so re-parsing the evidence for every edit is wasted work.
+    const trace = cwd ? traceTarget(evidence, cwd) : null;
+
     // Model output is untrusted input, so the shape is validated strictly here.
     // An empty path resolves to the working directory, and patching that produced
     // an EISDIR crash the first time a model returned `path: ""`.
@@ -220,12 +225,50 @@ function normalize(p, raw, cwd) {
         if (p2.startsWith('/') || p2.startsWith('\\') || /^[A-Za-z]:/.test(p2)) return null; // absolute
         if (p2.split(/[\\/]/).includes('..')) return null; // traversal
         if (f.find === '' || f.find === f.replace) return null; // no-op
-        // The model does not see the file tree, so it routinely answers with a
-        // bare basename ("tally.js") for a file that actually lives at
-        // "src/tally.js". Measured on the sandbox corpus, roughly half the fixes
-        // it proposed were dropped purely because the path did not resolve.
-        const resolved = resolveProposedPath(p2, cwd);
-        return { path: resolved, proposedPath: p2, find: f.find, replace: f.replace };
+        // Where the file is, in order of how much the evidence actually says.
+        //
+        // 1. The stack trace. The error names its own file and line, usually with
+        //    several path segments. A path that specific is not a guess.
+        // 2. The model's own path, if it already resolves.
+        // 3. The model's basename, resolved by searching for a unique match. This
+        //    is last because "exactly one file has that name" is not evidence of
+        //    intent -- it is a coin flip that happens to land, and it only refuses
+        //    when two files collide.
+        const hint = trace && trace.path ? trace : null;
+        let resolved = null;
+        let how = null;
+
+        if (hint) {
+          // The trace and the model agreeing is the strongest case there is.
+          const same = sameTarget(hint.path, p2, cwd);
+          if (same) {
+            resolved = hint.path;
+            how = 'trace';
+          }
+        }
+
+        if (!resolved) {
+          const direct = resolveProposedPath(p2, cwd);
+          if (direct !== p2 || existsSync(join(cwd ?? '.', p2))) {
+            resolved = direct;
+            how = 'model';
+          }
+        }
+
+        if (!resolved) {
+          const guessed = resolveProposedPath(p2, cwd);
+          if (guessed !== p2) {
+            resolved = guessed;
+            how = 'basename-search';
+          }
+        }
+
+        if (!resolved) {
+          resolved = p2;
+          how = 'unresolved';
+        }
+
+        return { path: resolved, proposedPath: p2, resolvedBy: how, find: f.find, replace: f.replace };
       })
       .filter(Boolean);
     if (files.length) fix = { description: String(p.fix.description ?? 'proposed edit'), files };
@@ -233,7 +276,27 @@ function normalize(p, raw, cwd) {
   return { verdict, confidence, summary: String(p.summary ?? ''), fix, raw: raw.slice(0, 2000) };
 }
 
-/** Directories never searched when hunting for a mis-pathed proposal. */
+/**
+ * Do the trace and the model point at the same file?
+ *
+ * When they do, that is the strongest evidence available: two independent
+ * sources naming one file. When they do not, the trace wins, because it is read
+ * off the error rather than guessed -- but the disagreement is recorded, so the
+ * journal shows that the model's answer was overridden rather than silently
+ * replaced.
+ */
+function sameTarget(tracePath, proposed, cwd) {
+  if (!tracePath) return false;
+  const a = tracePath.replace(/\\/g, '/').toLowerCase();
+  const b = proposed.replace(/\\/g, '/').toLowerCase();
+  if (a === b) return true;
+  // The model may answer with a bare basename of the same file.
+  if (basename(a) === basename(b) && basename(a) !== '') return true;
+  // Or with a path that differs only by the trace's machine-specific prefix.
+  if (a.endsWith('/' + b) || b.endsWith('/' + a)) return true;
+  void cwd;
+  return false;
+}
 const NEVER_SEARCHED = ['node_modules', 'dist', 'build', '.next', 'coverage'];
 
 /**

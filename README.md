@@ -275,6 +275,48 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Taking the file's name from the error, not from the model
+
+The model cannot see the file tree, so it answers with a bare basename:
+`tally.js` for a file at `src/tally.js`. The obvious repair -- search the tree for
+a file with that name -- is a guess wearing a decision's clothes:
+
+```
+model guessed wrong -> system guesses what the model meant -> edit wrong file
+```
+
+"Exactly one file has that name" is not evidence of intent. It refuses when two
+files collide and accepts when none do, so it is the same coin flip either way --
+it just fails loudly sometimes. A project with only `scripts/build.js` in it edits
+`scripts/build.js` because nothing happened to disagree.
+
+But the evidence usually names the file precisely:
+
+```
+at tally (/app/src/tally.js:2:16)
+File "svc/handlers.py", line 88, in handler
+  --> src/parse.rs:44:9
+```
+
+So the order is now:
+
+1. **the trace**, which is read off the error rather than guessed
+2. the model's own path, if it already resolves
+3. the model's basename, resolved by searching for a unique match -- now a
+   fallback, for evidence that genuinely names no file
+
+The trace's prefix is not trusted; `/app/src/tally.js` is from a container and
+does not exist here. What *is* trusted is the longest trailing run of segments
+that resolves to exactly one real file. That is a fact about this filesystem, not
+a guess about intent. Two or more matches at the same length is a refusal.
+
+A bare filename in a trace (`tally.js:2`) is deliberately **not** treated as
+specific -- it is the same weak signal as the model's basename guess, and
+pretending otherwise would reintroduce the guess.
+
+Every proposal records `resolvedBy`, so the journal shows whether the path came
+from the trace, the model, the fallback, or nowhere.
+
 ## Validating the object, not the path
 
 Checking that a path resolves inside the project and then opening it later is not
