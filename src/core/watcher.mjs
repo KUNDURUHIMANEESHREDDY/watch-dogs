@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { evaluate, severityAtLeast, SEVERITY } from '../analyze/rules.mjs';
 import { Advisor } from '../analyze/advisor.mjs';
 import { Applier } from '../act/apply.mjs';
+import { verifyProposals } from '../act/verify.mjs';
 import { redact } from '../capture/stream.mjs';
 import { log } from '../core/log.mjs';
 
@@ -108,6 +109,44 @@ export class Watcher extends EventEmitter {
       autonomy: cfg.autonomy,
       allowlist: cfg.allowlist ?? [],
     });
+    // Kept as plain fields because #applyLlmFix is async and cannot reach a
+    // private member of a class it is not nested inside.
+    this.projectRoot = cfg.projectRoot;
+    this.verifyCfg = cfg.verify ?? null;
+  }
+
+  /**
+   * Summarise a multi-file application honestly.
+   *
+   * A proposal can touch several files and they can succeed differently -- one
+   * applied, one refused by the file-class policy, one skipped because the anchor
+   * was gone. Collapsing that to a single status is what made the old code
+   * report a partial write as a clean success.
+   */
+  static aggregate(results) {
+    const n = results.length;
+    const applied = results.filter((r) => r?.status === 'applied').length;
+    const refused = results.filter((r) => r?.status === 'refused');
+    const other = results.filter((r) => r && r.status !== 'applied' && r.status !== 'refused');
+
+    let status;
+    if (!n) status = 'none';
+    else if (applied === n) status = 'all_applied';
+    else if (applied === 0) status = refused.length ? 'refused' : 'none_applied';
+    else status = 'partially_applied';
+
+    const bits = [];
+    if (applied !== n) bits.push(`${applied}/${n} applied`);
+    if (refused.length) bits.push(`${refused.length} refused: ${refused.map((r) => r.why ?? 'refused').join('; ')}`);
+    for (const r of other) bits.push(`${r.status}: ${r.why ?? ''}`.trim());
+
+    return {
+      status,
+      allApplied: status === 'all_applied',
+      summary: bits.join(' | '),
+      applied,
+      total: n,
+    };
   }
 
   get applier() {
@@ -262,35 +301,91 @@ export class Watcher extends EventEmitter {
       this.emit('advisor-down', advice);
     }
 
+    // Confidence is a measure of how sure the model sounded, not of whether the
+    // edit is right, so on its own it cannot authorise a write. The project's own
+    // verification decides, with the model reduced to proposing.
     if (advice.verdict === 'problem' && advice.fix && advice.confidence >= 0.6) {
-      const results = [];
-      for (const file of advice.fix.files) {
-        results.push(
-          // source: 'llm' so the guard applies the file-class policy. Without it
-          // the model could rewrite a CI workflow or a package manifest here,
-          // because the existing rails only ask whether the path is forbidden.
-          this.#applier.apply(
-            { kind: 'patch-file', path: file.path, find: file.find, replace: file.replace },
-            { cwd: rec.cwd, source: 'llm' },
-          ),
-        );
-      }
-      rec.advisor.acted = true;
-      rec.applied = results[0] ?? null;
-
-      // A refusal here is not a silent no-op. The proposal was reasonable and
-      // the human still needs to see it, so the finding is recorded as
-      // suggestion-only rather than disappearing.
-      const refused = results.find((r) => r?.status === 'refused');
-      if (refused) {
-        rec.advisor.acted = false;
-        rec.advisor.requiresHuman = true;
-        rec.advisor.why = refused.why ?? 'refused';
-        this.emit('needs-human', rec);
-      }
+      rec.advisor.proposed = true;
+      // Awaited so the record that is emitted carries the decision. Firing and
+      // forgetting meant every consumer saw `finding-updated` before the gate had
+      // run, so a reader could not tell whether the edit had been applied or
+      // merely proposed.
+      await this.#applyLlmFix(rec, advice);
     }
     this.#record(rec);
     this.emit('finding-updated', rec);
+  }
+
+  /**
+   * Apply an LLM-proposed fix, but only after something has proved it is safe.
+   *
+   * The order matters and is the whole point: stage the project, apply the edits
+   * to the copy, run the project's verification, and only then replay the same
+   * edits against the real tree. The real project is never left half-edited
+   * while the question is still open.
+   *
+   * Three outcomes, and all three are reported rather than collapsed:
+   *
+   *   pass        the project still passes its own checks; apply it
+   *   fail        the edit breaks the project; keep it as a suggestion and say
+   *               why, because a fix that fails the tests is worth showing
+   *   unverified  there was no way to check; do not apply autonomously
+   */
+  async #applyLlmFix(rec, advice) {
+    const files = advice.fix.files ?? [];
+
+    let verdict;
+    try {
+      verdict = await verifyProposals({
+        projectRoot: this.projectRoot,
+        files,
+        verifyCfg: this.verifyCfg,
+      });
+    } catch (e) {
+      verdict = { verdict: 'unverified', why: `verification could not be completed: ${e.message}` };
+    }
+
+    rec.advisor.verification = { verdict: verdict.verdict, why: verdict.why };
+
+    if (verdict.verdict !== 'pass') {
+      rec.advisor.acted = false;
+      rec.advisor.requiresHuman = true;
+      rec.advisor.why =
+        verdict.verdict === 'fail'
+          ? `not applied automatically: ${verdict.why}`
+          : `not applied automatically: ${verdict.why}`;
+      this.emit('needs-human', rec);
+      return;
+    }
+
+    const results = [];
+    for (const file of files) {
+      results.push(
+        // source: 'llm' so the guard applies the file-class policy. Without it
+        // the model could rewrite a CI workflow or a package manifest here,
+        // because the existing rails only ask whether the path is forbidden.
+        this.#applier.apply(
+          { kind: 'patch-file', path: file.path, find: file.find, replace: file.replace },
+          { cwd: rec.cwd, source: 'llm' },
+        ),
+      );
+    }
+
+    // Every file's outcome is kept. Storing only the first result made a
+    // three-file fix in which two writes were refused and one succeeded read as a
+    // clean success, and it set acted=true before knowing whether any of the
+    // writes had actually landed.
+    const counts = aggregate(results);
+    rec.applied = { status: counts.status, files: results };
+    rec.advisor.acted = counts.allApplied;
+    rec.advisor.why = counts.allApplied
+      ? 'applied after passing the project\'s own verification'
+      : counts.summary;
+
+    if (!counts.allApplied) {
+      rec.advisor.requiresHuman = true;
+      this.emit('needs-human', rec);
+    }
   }
 
   /** Applies a fix without ever blocking the ingest path. */

@@ -62,6 +62,24 @@ export const DEFAULTS = Object.freeze({
     // in ways nobody thinks about. This is on by default and should stay on.
     redact: true,
   },
+  // How a change is proved not to have broken anything.
+  //
+  // A model edit is judged on verdict and confidence, and neither is evidence the
+  // edit is correct. This is the check that turns "the model's anchor matched"
+  // into "the project still works", by staging the project, applying the edit
+  // there, and running the project's own verification before anything is written
+  // for real.
+  //
+  // Left null, no LLM-proposed edit is ever applied autonomously -- they are
+  // reported for a human instead. That is the honest default: with nothing to
+  // verify against, "verified" would be a word with no meaning behind it.
+  verify: {
+    command: null, // e.g. ['npm','test'] or ['npm','run','build'] or ['pytest','-q']
+    timeoutMs: 300_000,
+    // A fix is only promoted if verification passes. This is recorded so the
+    // decision can be shown in a finding rather than inferred.
+    report: true,
+  },
   paths: {
     data: null, // null => <projectRoot>/.watchdog
   },

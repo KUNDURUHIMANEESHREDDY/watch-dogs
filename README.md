@@ -275,6 +275,61 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Proving an edit before making it
+
+Confidence is not correctness. An LLM edit used to be authorised by:
+
+```js
+advice.verdict === 'problem' && advice.fix && advice.confidence >= 0.6
+```
+
+Neither half says anything about whether the edit is right. Confidence measures
+how sure the model sounded. The fix-quality eval then showed what was left over:
+patches that applied cleanly and parsed still changed behaviour for the worse,
+because a valid edit can be semantically wrong.
+
+So the edit is now proved rather than trusted:
+
+```
+copy the project to a scratch tree
+apply the proposed edits there
+run the project's own verification
+only then replay the same edits against the real tree
+```
+
+The real project is never left half-edited while the question is open. That is
+the difference from apply-then-check-then-revert, which leaves broken code on disk
+for the duration of the check and leaves it there permanently if the process dies
+mid-check.
+
+Three outcomes, all reported rather than collapsed:
+
+| | |
+|---|---|
+| `pass` | the project still passes its own checks; applied |
+| `fail` | it does not; kept as a suggestion, with the reason |
+| `unverified` | there was no way to check; **not** applied |
+
+Configure it per project:
+
+```json
+{ "verify": { "command": ["npm", "test"], "timeoutMs": 300000 } }
+```
+
+With nothing configured, **no model-proposed edit is ever applied
+autonomously** - they are reported for a human instead. That is the honest
+default: with nothing to verify against, "verified" is a word with no meaning
+behind it.
+
+> A bug worth knowing about, because it made this gate decoration for a while.
+> The first version reused `runCapture`, which collapses a child process to a
+> string and discards the exit code whenever stdout was non-empty
+> (`if (out.trim()) return finish(out)`). Fine for pulling a JSON envelope out of
+> an LLM reply. Disastrous here: `npm test` prints progress and exits 1, which
+> through that helper is indistinguishable from success. Every verification passed
+> unconditionally. A check that cannot fail is worse than no check, because it is
+> believed.
+
 ## Failing safe when configuration is broken
 
 A config file that cannot be read is a config whose intent is unknown, and the
