@@ -150,6 +150,22 @@ function cmdInit(flags) {
   for (const i of res.ides) out(col('c', i.ide + '     ') + i.settingsPath + col('d', '\n          ' + i.note));
   for (const n of res.notes) out(col('y', 'note: ') + n);
   out('\n' + col('b', 'Next: ') + 'open a new terminal, then run ' + col('b', 'wd doctor') + ' to confirm coverage.');
+
+  // The boundary, at the moment the user opts in.
+  //
+  // A limitation discovered at 2am is a bug. The same limitation read at install time,
+  // before anything has been relied on, is a decision the user consented to. This is
+  // the only place that consent can happen, and `wd doctor` is a report rather than an
+  // agreement -- so the scope is stated here as plainly as the README states it.
+  out('');
+  out(col('b', 'What you are covered for:') + ' instrumented shell sessions --');
+  out('  ' + col('d', 'PowerShell, Git Bash, and VS Code / Cursor terminals that load the profile block.'));
+  out('  ' + col('d', 'Full-screen programs, and detached work started from one of those shells.'));
+  out('');
+  out(col('b', 'Not covered, by decision:') + ' byte-level ConPTY capture, exit codes for');
+  out('  ' + col('d', 'externally started processes, WSL and JetBrains terminals, and automatic'));
+  out('  ' + col('d', 'restart of the daemon after a crash. Each needs something Windows does'));
+  out('  ' + col('d', 'not allow without elevation or a native binding. README: What this covers.'));
 }
 
 function cmdUninstall() {
@@ -425,7 +441,7 @@ async function cmdDoctor(flags) {
   const probe = conpty.probe();
   out(`  1 shell transcripts  ${cfg.capture.layers.shell ? col('g', 'on') : col('d', 'off')}`);
   out(`  2 process watcher    ${cfg.capture.layers.process ? col('g', 'on') : col('d', 'off')}`);
-  out(`  3 conpty proxy       ${cfg.capture.layers.conpty ? (probe.available ? col('g', 'on') : col('y', 'requested but unavailable')) : col('d', 'off')}`);
+  out(`  3 conpty proxy       ${cfg.capture.layers.conpty ? (probe.available ? col('g', 'on') : col('y', 'requested but unavailable')) : col('d', 'off -- out of scope, see README')}`);
   if (!probe.available && cfg.capture.layers.conpty) out('      ' + col('y', probe.reason));
   out('');
 

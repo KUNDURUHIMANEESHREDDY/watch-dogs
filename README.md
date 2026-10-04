@@ -19,12 +19,47 @@ Zero runtime dependencies. Node 20.11+.
 
 ---
 
+## What this covers
+
+The watchdog watches **instrumented shell sessions on Windows**. That is the
+product, and this is the whole of it:
+
+| Covered | How |
+|---|---|
+| PowerShell, Git Bash, and IDE terminals that load the profile | the shell's own console transcript |
+| Full-screen programs (`vim`, `less`, `fzf`, `lazygit`) | same transcript; reconstructed lines are approximate |
+| Detached work started from an instrumented shell (`npm test`, `pytest`, `node server.js`) | process identity and lifecycle, attributed by walking parent processes |
+
+`wd init` wires the profile block that makes the first row true. `wd doctor` reports
+which of it is live on this machine right now, and `wd status` is the same check at a
+glance.
+
+**Deliberately out of scope.** These are decisions, not defects, and are listed here
+so nobody later reads them as bugs still waiting to be fixed:
+
+| Out of scope | Why |
+|---|---|
+| Raw ConPTY byte capture (layer 3) | needs a compiled native binding. Half-proxying traffic we cannot reconstruct would be worse than not doing it, so the layer is off by default and reports `unavailable` if asked for. |
+| Exit codes for externally started processes | an exit code goes to the parent that spawned the process, and for detached work that parent is not us. Both Windows routes are closed: WMI process-stop tracing returns *Access denied* without elevation, and ETW needs the same native binding as above. |
+| WSL and JetBrains terminals | neither is installed on this machine, and neither loads the PowerShell profile block that layer 1 depends on. |
+| Restarting the daemon after a crash | needs `<RestartOnFailure>` in a Scheduled Task, which is *Access is denied* without elevation. Recovery is on next shell start. |
+| Multi-line understanding | rules judge one line at a time. A stack trace is read as N independent lines. |
+
+The boundary is drawn where it is because the alternative was a tool that claimed
+more than it could do. Every item above was measured on the machine this was built
+on rather than assumed, and each is a boundary rather than a backlog entry.
+
+One consequence worth stating plainly: **a project's own checks passing is what
+verification can prove**, and whether those checks cover the error that was reported
+is not something this program can know. [Verification proves a transition, not a
+repair](#verification-proves-a-transition-not-a-repair) is the long version.
+
 ## The problem this solves
 
 "Watch my terminals" is not a single stream. Each shell, each IDE tab, each SSH
 session is a separate process with its own buffer, and some of it lives in the
-kernel. There is no global terminal firehose on Windows. So the watchdog builds
-its coverage in layers, and is explicit about what each layer can and cannot see.
+kernel. There is no global terminal firehose on Windows, so layer 1 reads each
+shell's own transcript instead of trying to find one stream.
 
 | Layer | What it sees | Cost | Status here |
 |---|---|---|---|
@@ -1213,17 +1248,15 @@ is not there.
   transcript layer but render as a stream of cursor-positioned writes, so the
   reconstructed lines are approximate. Detection still works; the evidence line may
   look scrambled.
-- **Layer 2 has no exit codes, and cannot get them.** A process exit code goes to
-  the parent that spawned the process; for the IDE tasks and scheduler jobs this
-  layer exists to watch, that parent is not us. The two Windows routes both fail
-  here: WMI process-stop tracing returns *Access denied* for a non-administrator
-  (verified on this machine), and ETW needs a native binding, which is the same
-  wall that leaves ConPTY disabled. So a process that exited cleanly and one that
-  crashed look identical to this layer.
+- **Layer 2 sees no exit codes.** Out of scope, and stated here so the mechanism is
+  on the record: an exit code goes to the parent that spawned the process, and for
+  detached work that parent is not us. Both Windows routes are closed -- WMI
+  process-stop tracing returns *Access denied* without elevation, and ETW needs the
+  same native binding that keeps ConPTY off.
 
-  This is **not** a gap in the execution path: commands the watchdog spawns itself
-  do report their exit code, because `runCapture` sees the `close` event on its
-  own child. The absence is specific to externally started processes.
+  This is **not** a gap in the execution path. Commands the watchdog spawns itself do
+  report their exit code, because `runCapture` sees the `close` event on its own
+  child. The absence is specific to externally started processes.
 
 - **Attribution on Windows works by inheritance, not by inspection.** There is no
   working-directory property on `Win32_Process`, and the working directory appears

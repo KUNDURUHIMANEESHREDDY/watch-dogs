@@ -130,6 +130,42 @@ function wd(args, cwd) {
   }
 }
 
+test('wd init states the coverage boundary, so consent happens at install', () => {
+  // The risk of calling these limits "out of scope" is that someone later reads them
+  // as bugs still waiting to be fixed. The mitigation is not the wording in the README,
+  // which nobody reads at the moment they opt in -- it is saying it here, once, at the
+  // point where the user is deciding whether to install this at all.
+  //
+  // Both halves are asserted. A boundary stated only as what is covered is marketing,
+  // and one stated only as what is missing is the limitation list this replaced.
+  withIsolatedHome(() => {
+    const root = project();
+    const out = wd(['init'], root);
+
+    assert.match(out, /covered for/i, 'init does not say what the user is covered for');
+    assert.match(out, /instrumented shell/i);
+    assert.match(out, /PowerShell/);
+
+    assert.match(out, /by decision|out of scope/i, 'init does not mark the exclusions as decisions');
+    assert.match(out, /ConPTY/i, 'the ConPTY exclusion is not stated');
+    assert.match(out, /exit codes/i, 'the exit-code exclusion is not stated');
+
+    // It must point at where the reasoning lives, or the statement is just an assertion.
+    assert.match(out, /README/i);
+  });
+});
+
+test('the boundary is stated on a real install but not on a dry run', () => {
+  // A dry run reports what would be written. Printing a coverage boundary there would
+  // imply nothing was going to change, which is the one thing a dry run is for.
+  withIsolatedHome(() => {
+    const root = project();
+    const dry = wd(['init', '--dry-run'], root);
+    assert.doesNotMatch(dry, /covered for/i);
+    assert.match(dry, /nothing will be written/i);
+  });
+});
+
 test('wd init --autonomous records the choice in the project config', () => {
   withIsolatedHome(() => {
     const root = project();
