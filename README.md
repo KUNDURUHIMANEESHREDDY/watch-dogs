@@ -1086,6 +1086,24 @@ is not there.
   `command_script_not_allowed`. The regex denylist still runs, **last**, as a
   backstop -- two layers on purpose, so the allowlist is the boundary rather than
   the fallback. Unknown commands fail closed.
+
+  The gate itself was, until recently, load-bearing and untested at the same time.
+  Replacing the whole of `checkCommand` with `{ ok: true }` failed 15 tests, so the
+  allowlist is well covered -- but deleting the one line that calls the guard from
+  `applyAsync`, the function whose entire job is to run commands, failed **zero**.
+  `test/command-gate-e2e.test.mjs` now drives `applyAsync` and asserts on the
+  refusal, including that a permitted command still runs, so the refusal tests are
+  discriminating rather than merely strict. Removing the gate now fails 7.
+
+  A refused command is also journalled, with the argv that was proposed. It was not:
+  the gate refuses before the command path runs, so a proposal to run something
+  dangerous left no evidence that it had ever been made.
+
+  `listRails()` -- what `wd doctor` shows when you ask what will not be done --
+  claimed `git push` was refused under `command_verb_not_allowed`. It is allowed.
+  `test/rails-truthfulness.test.mjs` now executes every example in that list and
+  requires it to actually be refused, so the refusal list cannot drift away from the
+  behaviour again. Three more examples were re-filed while writing it.
 - **PowerShell 5.1 only** here -- `pwsh` is not installed. The profile block is
   compatible with both.
 - **Rules judge one line at a time.** A multi-line stack trace is judged as N

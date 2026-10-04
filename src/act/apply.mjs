@@ -70,6 +70,21 @@ export class Applier {
     if (!guardResult.ok) {
       const d = describeRefusal(guardResult.code);
       log.warn(`refused ${action.kind}: ${guardResult.why}`);
+      // A refused command leaves a journal entry.
+      //
+      // It used to return without a trace, because the gate refuses before
+      // `#command` is ever reached and that is where every other command outcome
+      // gets recorded. So the single most interesting event in this file's history --
+      // something proposed `helm upgrade` -- was the one entry guaranteed to be
+      // missing from the record. A refusal nobody can review is not much of a
+      // control.
+      if (action.kind === 'command' || action.kind === 'install-deps' || action.kind === 'repair-deps') {
+        this.#recordCommand(action.argv ?? [], ctx, action, {
+          outcome: 'refused',
+          why: guardResult.why,
+          detail: guardResult.code,
+        });
+      }
       return { status: 'refused', code: guardResult.code, why: guardResult.why, examples: d.examples };
     }
     if (this.autonomy === 'suggest') return { status: 'suggested', why: 'autonomy is set to "suggest"' };
