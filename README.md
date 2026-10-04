@@ -302,7 +302,7 @@ containedPath(root, target)      -> has it moved since?
 ```
 
 On Windows `ino` is the NTFS file index: stable across writes to one file,
-distinct between files, and — the property that makes this work — **equal to the
+distinct between files, and - the property that makes this work - **equal to the
 outside file's index when read through a junction**. So a swap produces a handle
 whose identity no longer matches, and is refused.
 
