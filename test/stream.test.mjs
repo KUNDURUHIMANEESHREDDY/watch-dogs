@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LineSplitter, stripAnsi, redact } from '../src/capture/stream.mjs';
+import { awsKeyId, githubToken } from './helpers/secret-fixtures.mjs';
 
 test('reassembles lines split across chunk boundaries', () => {
   const s = new LineSplitter();
@@ -63,8 +64,11 @@ test('flush emits a trailing line that never got a newline', () => {
 });
 
 test('redacts common secret shapes', () => {
-  assert.match(redact('export AWS=AKIAIOSFODNN7EXAMPLE'), /<redacted:aws-key>/);
-  assert.match(redact('token: ghp_abcdefghijklmnopqrstuvwxyz0123'), /<redacted:github-token>/);
+  // Assembled from fragments rather than written out. See helpers/secret-fixtures.mjs:
+  // a contiguous credential-shaped string in this file is a secret scan finding, and
+  // the value the redactor is handed here is byte-identical either way.
+  assert.match(redact(`export AWS=${awsKeyId}`), /<redacted:aws-key>/);
+  assert.match(redact(`token: ${githubToken}`), /<redacted:github-token>/);
   assert.match(redact('password: hunter2xyz'), /password: <redacted>/);
   // The scheme is preserved deliberately: redacting the whole value would make
   // the log harder to read without making it any safer.

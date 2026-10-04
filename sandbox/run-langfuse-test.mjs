@@ -19,6 +19,7 @@
 import { createServer } from 'node:http';
 import { Advisor } from '../src/analyze/advisor.mjs';
 import { initTracing, tracing, resetTracing } from '../src/observe/trace.mjs';
+import { awsKeyId, githubToken, evidenceWithSecrets } from '../test/helpers/secret-fixtures.mjs';
 
 // Real keys mean the real thing. Anything else means the local stand-in, so the
 // default run is always safe and always meaningful.
@@ -293,8 +294,10 @@ async function main() {
   // ---------------------------------------------------------------- L3
   console.log(head('L3  secrets in terminal output never leave the machine'));
   {
-    const secretEvidence =
-      'deploy failed: using AWS key AKIAIOSFODNN7EXAMPLE and github token ghp_abcdefghijklmnopqrstuvwxyz012345 to push';
+    // Assembled at runtime rather than written out, so running this script does not
+    // leave a credential-shaped string in the repository. Same bytes reach the
+    // redactor either way.
+    const secretEvidence = evidenceWithSecrets('deploy failed');
     await tracedAdvisorReview(rx, { evidence: secretEvidence, title: 'push rejected' });
     await sleep(1500);
     if (LIVE) {
@@ -305,7 +308,7 @@ async function main() {
     } else {
       const withSecret = rx.received.slice(-3);
       const leaked = withSecret.some(
-        (r) => r.text.includes('AKIAIOSFODNN7EXAMPLE') || r.text.includes('ghp_abcdefghijklmnopqrstuvwxyz012345'),
+        (r) => r.text.includes(awsKeyId) || r.text.includes(githubToken),
       );
       check(!leaked, 'no secret appeared in any exported request');
       check(

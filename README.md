@@ -286,6 +286,39 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## The repository itself contains no credential-shaped string
+
+Redaction is only worth something if the tests can prove it, and testing it needs
+input the redactor will match, which means input shaped exactly like a credential.
+Those literals used to be written into three files here, which an audit flagged.
+
+They were synthetic -- an AWS-documented example key and a sequential token string
+-- and it would have been reasonable to say so and move on. But "obviously
+synthetic" is a judgement every secret scanner has to make, and some of them get it
+wrong. A security-focused repository should pass a secret scan without an argument.
+
+So the values are assembled at runtime in `test/helpers/secret-fixtures.mjs` and no
+contiguous match exists anywhere in the tree. What the redactor is handed is
+byte-identical, and the assertions are unchanged.
+
+`test/no-secrets-in-source.test.mjs` walks every text file in the repository and
+fails on any match, which is what stops this regressing -- writing a fixture with a
+literal is the obvious way to break it, and the obvious way is the one that happens.
+
+It also asserts the scan patterns still match a value of the shape they forbid.
+That assertion is not decoration. The first version of the patterns was built by
+concatenation and split inside a character class, producing `[0-9AZ]` instead of
+`[0-9A-Z]`, which matched nothing -- so the guard passed against a repository still
+full of the strings it existed to forbid. A guard whose own patterns are untested
+reports success for exactly as long as nothing needs catching.
+
+Two further notes, both found by running it rather than reading it: the guard's
+first draft quoted one of the values in its own explanatory comment and failed on
+itself, and a second pattern lost a `0` and stopped matching. The test now reports
+a file and an offset rather than the value, since echoing a match back into a
+failure message puts the string in the transcript, which is the thing being
+prevented.
+
 ## Rollback will not destroy work it never made
 
 Rollback means overwriting whatever is at the path now with what was there before

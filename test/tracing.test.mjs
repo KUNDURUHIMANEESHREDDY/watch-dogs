@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initTracing, tracing, resetTracing, resolveTracing, traceAdvisorReview } from '../src/observe/trace.mjs';
 import { buildProfileBlock, buildBashBlock } from '../src/install/install.mjs';
+import { awsKeyId, githubToken } from './helpers/secret-fixtures.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'wd-trace-'));
 
@@ -167,19 +168,23 @@ test('a thrown review is recorded as an exception and rethrown unchanged', async
 // ------------------------------------------------------------------ redaction
 
 test('secrets in terminal output are redacted before they leave the machine', async () => {
+  // The shapes are assembled at runtime; see helpers/secret-fixtures.mjs. What the
+  // redactor receives is identical, and what the span must not contain is checked
+  // against the same assembled value rather than a literal that would itself be a
+  // finding.
   const { spans } = await tracedReview(
-    async () => ({ verdict: 'noise', confidence: 0.5, summary: 'saw AKIAIOSFODNN7EXAMPLE in output', fix: null }),
+    async () => ({ verdict: 'noise', confidence: 0.5, summary: `saw ${awsKeyId} in output`, fix: null }),
     {
-      evidence: 'deploy failed with key AKIAIOSFODNN7EXAMPLE and token ghp_abcdefghijklmnopqrstuvwxyz012345',
+      evidence: `deploy failed with key ${awsKeyId} and token ${githubToken}`,
     },
   );
   const a = attrs(spans[0]);
   const input = String(a['langfuse.observation.input']);
   const output = String(a['langfuse.observation.output']);
 
-  assert.ok(!input.includes('AKIAIOSFODNN7EXAMPLE'), 'AWS key reached the span');
-  assert.ok(!input.includes('ghp_abcdefghijklmnopqrstuvwxyz012345'), 'GitHub token reached the span');
-  assert.ok(!output.includes('AKIAIOSFODNN7EXAMPLE'), 'AWS key reached the output');
+  assert.ok(!input.includes(awsKeyId), 'AWS key reached the span');
+  assert.ok(!input.includes(githubToken), 'GitHub token reached the span');
+  assert.ok(!output.includes(awsKeyId), 'AWS key reached the output');
   assert.match(input, /<redacted:aws-key>/);
   assert.match(input, /<redacted:github-token>/);
 });
