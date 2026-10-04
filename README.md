@@ -275,6 +275,54 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Validating the object, not the path
+
+Checking that a path resolves inside the project and then opening it later is not
+the same as checking the thing you opened. Between the two moments the object at
+that path can be replaced with a junction pointing somewhere else, and every
+path-based check would have passed about a file nobody was going to write to.
+
+`#patchFile` made that concrete. It opened the path **five separate times**:
+`existsSync`, `statSync`, a read to compute the edit, a second read for the
+snapshot, and the write. Any two of those could see different objects.
+
+The worst consequence was not an escape at all. It was that the snapshot could
+record content that was never patched, so `wd rollback` would faithfully restore
+the wrong thing and report success doing it.
+
+The write path now opens once, proves the handle is the object that was
+validated, and reads and writes through that descriptor:
+
+```
+containedPath(root, target)      -> the path is inside the project
+lstatSync(abs)                   -> which object does it refer to *now*
+openSync(abs, 'r+')
+fstatSync(fd)                    -> is this the same object?
+containedPath(root, target)      -> has it moved since?
+```
+
+On Windows `ino` is the NTFS file index: stable across writes to one file,
+distinct between files, and — the property that makes this work — **equal to the
+outside file's index when read through a junction**. So a swap produces a handle
+whose identity no longer matches, and is refused.
+
+A swap *after* the open cannot corrupt anything, because the descriptor is bound
+to the validated object. It is still refused: something else is rewriting the
+tree, and the edit was computed from content that may no longer be current.
+
+Two details that are easy to get wrong:
+
+- Writes go at an **explicit offset**. The read left the descriptor at end of
+  file, so writing at that position after truncating would append into the hole
+  and leave the previous contents' tail behind. Dropping the offset argument fails
+  4 tests.
+- `sameFile` returns false when either `ino` is 0. Comparing two zeros would make
+  every pair look identical, which is worse than admitting we cannot tell.
+
+**Still not closed:** hardlinks. A hardlink inside the project to a file outside
+it reports the in-project path from every API, and its identity *is* the
+original's. Nothing path-based can see it, and nothing here pretends otherwise.
+
 ## Proving an edit before making it
 
 Confidence is not correctness. An LLM edit used to be authorised by:

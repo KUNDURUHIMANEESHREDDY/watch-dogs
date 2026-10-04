@@ -5,7 +5,7 @@
  * Ordering: propose -> guard -> diff -> autonomy gate -> write -> journal.
  * The guard runs before anything touches the disk, not after.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join, dirname, resolve, relative, basename, extname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
-import { containedPath } from './containment.mjs';
+import { containedPath, openContained, readFd, writeFd, safeClose } from './containment.mjs';
 import { log } from '../core/log.mjs';
 
 export class Applier {
@@ -123,19 +123,44 @@ export class Applier {
   #pendingSnapshots = new Map();
 
   #patchFile(action, ctx) {
-    const abs = this.#resolveInRoot(action.path, ctx.cwd);
-    if (!existsSync(abs)) return { status: 'skipped', why: `target file does not exist: ${action.path}` };
-    // Never read a directory as if it were a file. An empty relative path resolves
-    // to the working directory, so this is reachable rather than theoretical.
-    if (!statSync(abs).isFile()) {
-      return { status: 'skipped', why: `target is not a regular file: ${action.path}` };
+    const root = ctx.cwd ?? this.projectRoot;
+
+    // Validate the path, open it, and prove the handle is the object that was
+    // validated -- then read and write through that one descriptor.
+    //
+    // This used to be five separate opens by path: existsSync, statSync,
+    // readFileSync for the edit, a second read for the snapshot, and
+    // writeFileSync. Any of those could see a different object than the one
+    // before it. The worst consequence was not an escape but a lie in the
+    // journal: the snapshot could record content that was not what got patched,
+    // so a rollback would restore the wrong thing.
+    const opened = openContained(root, action.path, { flags: 'r+' });
+    if (!opened.ok) {
+      const why =
+        opened.why === 'missing'
+          ? `target file does not exist: ${action.path}`
+          : opened.why === 'not-a-file'
+            ? `target is not a regular file: ${action.path}`
+            : `${action.path} was not opened for writing: ${opened.detail}`;
+      return { status: 'skipped', why };
     }
-    const before = readFileSync(abs, 'utf8');
+
+    const abs = opened.abs;
+    let before;
+    try {
+      before = readFd(opened.fd, 'utf8');
+    } catch (e) {
+      safeClose(opened.fd);
+      return { status: 'skipped', why: `could not read ${action.path}: ${e.message}` };
+    }
+
     const idx = before.indexOf(action.find);
     if (idx === -1) {
+      safeClose(opened.fd);
       return { status: 'skipped', why: `quoted "find" text is not present in ${action.path}; the model invented it` };
     }
     if (before.indexOf(action.find, idx + 1) !== -1) {
+      safeClose(opened.fd);
       return { status: 'skipped', why: `"find" text is ambiguous (appears more than once) in ${action.path}` };
     }
     const after = before.slice(0, idx) + action.replace + before.slice(idx + action.find.length);
@@ -146,6 +171,7 @@ export class Applier {
     // not parse. Applying that in autonomous mode breaks the user's source.
     const verdict = syntaxVerdict(abs, after);
     if (verdict === 'invalid') {
+      safeClose(opened.fd);
       return {
         status: 'skipped',
         why:
@@ -154,8 +180,18 @@ export class Applier {
       };
     }
 
-    this.#snapshot(abs);
-    this.#write(abs, after);
+    // The snapshot is the content that was actually read through the validated
+    // descriptor, not a second read of the path. Two reads can disagree.
+    this.#pendingSnapshots.set(abs, Buffer.from(before, 'utf8'));
+
+    try {
+      writeFd(opened.fd, after);
+    } catch (e) {
+      safeClose(opened.fd);
+      return { status: 'error', why: `could not write ${action.path}: ${e.message}` };
+    }
+    safeClose(opened.fd);
+
     return this.#journal({ type: 'patch', abs, before, after, ctx, action });
   }
 
