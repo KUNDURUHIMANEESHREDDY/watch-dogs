@@ -6,7 +6,7 @@
  * The guard runs before anything touches the disk, not after.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync, copyFileSync, unlinkSync } from 'node:fs';
-import { join, dirname, resolve, relative, basename, extname } from 'node:path';
+import { join, dirname, resolve, relative, basename, extname, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -240,6 +240,12 @@ export class Applier {
     const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const full = { id, at: new Date().toISOString(), projectRoot: this.projectRoot, cwd: ctx2cwd(rec.ctx), ...rec };
     delete full.ctx;
+    // The project-relative path is the authoritative record of what was touched.
+    // `abs` is derived from it on rollback, so a journal that has been edited to
+    // point somewhere else cannot steer the write outside the project.
+    if (full.abs) {
+      full.rel = relative(this.projectRoot, full.abs).split(sep).join('/');
+    }
     writeFileSync(join(this.journalDir, `${id}.json`), JSON.stringify(full));
     return full;
   }
@@ -270,14 +276,69 @@ export class Applier {
     const rec = JSON.parse(readFileSync(p, 'utf8'));
     if (rec.outcome !== 'ok') return { status: 'skipped', why: 'that action did not succeed' };
     if (rec.type === 'command') return { status: 'skipped', why: 'shell actions are not reversible; rerun the command manually if needed' };
+
+    // A journal entry is a file on disk, not a trusted authority.
+    //
+    // This path used to go straight to writeFileSync(rec.abs, rec.before) with no
+    // guard at all, so the security boundary was "normal action -> guard,
+    // rollback -> trust the journal". Anything able to edit a journal file -- a
+    // postinstall script, a compromised dependency, or a bug in this program --
+    // could redirect a rollback to overwrite a file outside the project.
+    //
+    // The target is therefore re-derived from the recorded relative path and put
+    // back through the same containment and file-class policy every other write
+    // gets. An entry with no relative path predates this and is refused rather
+    // than guessed at.
+    const target = this.#rollbackTarget(rec);
+    if (target.error) return { status: 'refused', why: target.error };
+
     if (rec.before === null) {
-      if (existsSync(rec.abs)) renameSync(rec.abs, rec.abs + '.wd-deleted');
-      return { status: 'rolled-back', note: 'file did not exist before; moved to .wd-deleted' };
+      if (existsSync(target.abs)) renameSync(target.abs, target.abs + '.wd-deleted');
+      rec.outcome = 'rolled-back';
+      writeFileSync(p, JSON.stringify(rec));
+      return { status: 'rolled-back', note: 'file did not exist before; moved to .wd-deleted', path: target.abs };
     }
-    writeFileSync(rec.abs, rec.before);
+
+    writeFileSync(target.abs, rec.before);
     rec.outcome = 'rolled-back';
     writeFileSync(p, JSON.stringify(rec));
-    return { status: 'rolled-back', path: rec.abs };
+    return { status: 'rolled-back', path: target.abs };
+  }
+
+  /**
+   * Re-derive and re-validate a rollback target.
+   * @returns {{abs: string}|{error: string}}
+   */
+  #rollbackTarget(rec) {
+    const rel = typeof rec.rel === 'string' ? rec.rel.trim() : '';
+    if (!rel || rel.startsWith('/') || rel.includes('\0') || /^[A-Za-z]:/.test(rel)) {
+      return { error: 'journal entry has no usable relative path, so its target cannot be verified' };
+    }
+    if (rel.split(/[\\/]/).includes('..')) {
+      return { error: `journal entry points outside the project: ${rel}` };
+    }
+
+    // Same canonical containment check every other write goes through.
+    const check = containedPath(this.projectRoot, rel);
+    if (!check.ok) {
+      return { error: `journal entry resolves outside the project root (${rel}); refusing to roll back` };
+    }
+
+    // Same file-class policy. Rolling a "change" to a credential file or a git
+    // hook is still a write to a credential file.
+    const verdict = isRefused({ kind: 'patch-file', path: check.real }, { projectRoot: this.projectRoot, source: 'llm' });
+    if (!verdict.ok) {
+      return { error: `journal entry targets a protected file: ${verdict.why}` };
+    }
+
+    // If the entry carries an absolute path and it disagrees with what we just
+    // derived, something has edited the journal. Refuse rather than pick one.
+    if (typeof rec.abs === 'string' && rec.abs) {
+      if (resolve(rec.abs) !== resolve(check.abs)) {
+        return { error: `journal entry's recorded path does not match its relative path; refusing to trust it` };
+      }
+    }
+    return { abs: check.abs };
   }
 }
 
