@@ -12,12 +12,20 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv, installScriptsIn, NO_SCRIPTS } from './deps.mjs';
-import { isRefused, describeRefusal } from './guard.mjs';
+import { isRefused, describeRefusal, REFUSAL } from './guard.mjs';
 import { containedPath, openContained, readFd, safeClose } from './containment.mjs';
 import { sha256Of, shortHash } from './hashes.mjs';
 import { atomicReplace, atomicWriteJson, atomicReplaceIfUnchanged, staleTempFiles, removeTemp } from './atomic.mjs';
 import { log } from '../core/log.mjs';
 
+/**
+ * Action kinds this program will not perform unattended.
+ *
+ * Dependency actions only. Everything else the watchdog does autonomously records a
+ * preimage and can be rolled back; these cannot, and that is the whole reason. See
+ * the check in `#gate`.
+ */
+const IRREVERSIBLE_KINDS = new Set(['install-deps', 'repair-deps']);
 export class Applier {
   constructor({ projectRoot, dataDir, autonomy = 'autonomous', allowlist = [] }) {
     this.projectRoot = resolve(projectRoot);
@@ -43,6 +51,16 @@ export class Applier {
     const gate = this.#gate(action, ctx);
     if (gate) return gate;
 
+    // Gated before deferred, deliberately, and the order was briefly reversed here.
+    //
+    // This method cannot run a command -- there is no event loop to block and no
+    // queue to serialise on -- so it hands those back for `applyAsync`. But a refusal
+    // is a stronger and more useful answer than "wrong entry point", and the rails
+    // only get consulted here. Deferring first would mean a forbidden command came
+    // back as `deferred` from the sync path and `refused` from the async one: the
+    // same action, two verdicts, depending on which door you came through.
+    //
+    // So: policy first, routing second. When the gate passes, a command is deferred.
     if (action.kind === 'command' || action.kind === 'install-deps' || action.kind === 'repair-deps') {
       return { status: 'deferred', why: 'command execution must go through applyAsync' };
     }
@@ -70,28 +88,65 @@ export class Applier {
     if (!guardResult.ok) {
       const d = describeRefusal(guardResult.code);
       log.warn(`refused ${action.kind}: ${guardResult.why}`);
-      // A refused command leaves a journal entry.
-      //
-      // It used to return without a trace, because the gate refuses before
-      // `#command` is ever reached and that is where every other command outcome
-      // gets recorded. So the single most interesting event in this file's history --
-      // something proposed `helm upgrade` -- was the one entry guaranteed to be
-      // missing from the record. A refusal nobody can review is not much of a
-      // control.
-      if (action.kind === 'command' || action.kind === 'install-deps' || action.kind === 'repair-deps') {
-        this.#recordCommand(action.argv ?? [], ctx, action, {
-          outcome: 'refused',
-          why: guardResult.why,
-          detail: guardResult.code,
-        });
-      }
+      this.#noteRefusal(action, ctx, guardResult.code, guardResult.why);
       return { status: 'refused', code: guardResult.code, why: guardResult.why, examples: d.examples };
     }
     if (this.autonomy === 'suggest') return { status: 'suggested', why: 'autonomy is set to "suggest"' };
     if (this.autonomy === 'allowlist' && !this.allowlist.has(action.kind)) {
       return { status: 'suggested', why: `"${action.kind}" is not on the allowlist` };
     }
+
+    // Dependency actions are the one thing this program will not do unattended.
+    //
+    // Not because a container is missing. With --ignore-scripts no third-party code
+    // runs, and `npm ci` reproduces the lockfile rather than resolving anything new,
+    // so the "installs execute code" objection does not apply to this path.
+    //
+    // The reason is the undo. `npm ci` deletes node_modules and rebuilds it -- the
+    // widest blast radius of any action here -- and a command is journalled as
+    // unreversible, so `wd rollback` refuses it by design. Every other autonomous
+    // action records a preimage and can be put back. This one cannot, which makes it
+    // the only action where "autonomous" would mean "unattended and unrecoverable".
+    //
+    // Consent already exists and is stricter than a prompt would be: the allowlist
+    // mode requires the user to name the kind. So this is not a new mechanism, it is
+    // refusing to let the loosest tier imply the tighter ones.
+    if (this.autonomy === 'autonomous' && IRREVERSIBLE_KINDS.has(action.kind)) {
+      const why =
+        `${action.kind} is refused under "autonomous". It rebuilds the dependency tree, ` +
+        'which is the widest change this program makes, and it is the one action with no undo: ' +
+        'a dependency change is journalled as a command, and wd rollback will not reverse a ' +
+        'command. No package code runs -- installs carry --ignore-scripts -- so this is about ' +
+        'blast radius and recoverability, not about executing untrusted code.';
+      this.#noteRefusal(action, ctx, REFUSAL.IRREVERSIBLE, why);
+      return {
+        status: 'refused',
+        code: REFUSAL.IRREVERSIBLE,
+        why,
+        examples: [
+          'wd init --allowlist     then list repair-deps to opt in by name',
+          'run the install yourself, where you can see what it does',
+        ],
+      };
+    }
     return null;
+  }
+
+  /**
+   * Record a refused command or dependency action.
+   *
+   * A refusal that leaves no trace is indistinguishable, later, from a command that
+   * was never proposed -- and the actions worth refusing are exactly the ones whose
+   * absence from the record you would notice last.
+   *
+   * Both refusal paths in `#gate` call this. It used to sit inline in the guard
+   * branch only, so the autonomy refusal below was the one event in this file's
+   * history guaranteed to be missing from it: a proposal to rebuild the dependency
+   * tree unattended, recorded nowhere.
+   */
+  #noteRefusal(action, ctx, code, why) {
+    if (action.kind !== 'command' && action.kind !== 'install-deps' && action.kind !== 'repair-deps') return;
+    this.#recordCommand(action.argv ?? [], ctx, action, { outcome: 'refused', why, detail: code });
   }
 
   /**
@@ -279,6 +334,21 @@ export class Applier {
           ? repairArgv(root)
           : action.argv;
     if (!argv?.length) {
+      // Journalled, because this is the supply-chain guard firing. "Not a declared
+      // dependency" is the single most important refusal this program makes -- it is
+      // the attack the whole package-allowlist exists to stop -- and it was the one
+      // refusal that left no record. A control that works and cannot be reviewed is
+      // a control you will eventually stop believing.
+      this.#recordCommand([], ctx, action, {
+        outcome: 'refused',
+        why:
+          action.kind === 'install-deps'
+            ? explainInstallRefusal(action.package, ctx.cwd ?? this.projectRoot, action.ecosystem)
+            : action.kind === 'repair-deps'
+              ? 'refused to repair node_modules automatically: this project has no lockfile, so npm install would re-resolve every dependency and could pull versions you never pinned. Commit a lockfile, or run the install yourself.'
+              : 'no command to run',
+        detail: action.package ?? null,
+      });
       return {
         status: 'skipped',
         why:

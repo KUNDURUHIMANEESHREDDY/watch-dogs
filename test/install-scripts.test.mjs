@@ -35,7 +35,7 @@ function project(files) {
 }
 
 const applierFor = (root) =>
-  new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'autonomous', allowlist: [] });
+  new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
 
 /* ------------------------------------------------------------------ *
  * The invariant

@@ -99,7 +99,19 @@ function reset() {
   writeFileSync(join(SANDBOX, '.watchdog', 'config.json'), JSON.stringify(sandboxConfig(), null, 2) + '\n');
 }
 
-const applier = () => new Applier({ projectRoot: SANDBOX, dataDir: join(SANDBOX, '.watchdog'), autonomy: 'autonomous' });
+// Dependency kinds are named explicitly rather than run under "autonomous".
+  //
+  // Autonomous refuses install and repair actions, because those rebuild the
+  // dependency tree and are the one action with no undo. Naming them in an allowlist
+  // is the supported way to opt in, so the scenarios below that exercise install
+  // policy do exactly that -- which is also what a real user has to do.
+  const applier = () =>
+    new Applier({
+      projectRoot: SANDBOX,
+      dataDir: join(SANDBOX, '.watchdog'),
+      autonomy: 'allowlist',
+      allowlist: ['patch-file', 'write-file', 'command', 'install-deps', 'repair-deps'],
+    });
 
 // ----------------------------------------------------------------- scenarios
 

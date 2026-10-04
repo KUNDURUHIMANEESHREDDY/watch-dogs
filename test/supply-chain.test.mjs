@@ -34,7 +34,7 @@ function project(files) {
   return root;
 }
 
-const applierFor = (root) => new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'autonomous' });
+const applierFor = (root) => new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
 
 // ------------------------------------------------------------ the attack
 

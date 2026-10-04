@@ -140,7 +140,12 @@ async function traceRefusal() {
   step('fix template', '$1', findings[0].fix.package, 'the rule still extracts the name...');
   step('isDeclared()', 'evil-pkg', isDeclared(proj, 'evil-pkg'), '...and here the path stops');
 
-  const a = new Applier({ projectRoot: proj, dataDir: join(proj, '.watchdog'), autonomy: 'autonomous' });
+  // The kind is named explicitly, because this demo is about the *package* allowlist
+  // refusing an undeclared dependency. Opting in is what isolates that control: left
+  // on "autonomous", dependency actions are refused before the allowlist is consulted,
+  // so the hop this walkthrough exists to show would never be reached -- and the
+  // narration below would be claiming credit for a refusal it did not cause.
+  const a = new Applier({ projectRoot: proj, dataDir: join(proj, '.watchdog'), autonomy: 'allowlist', allowlist: ['install-deps'] });
   const res = await a.applyAsync(findings[0].fix, { cwd: proj });
   step('applyAsync()', 'install-deps evil-pkg', res.status, res.why?.slice(0, 70));
   step('journal', 'action taken', `${a.listJournal().length} entries`, 'nothing executed means nothing journalled');

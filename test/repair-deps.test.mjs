@@ -24,7 +24,7 @@ function project(files) {
   return root;
 }
 
-const applierFor = (root) => new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'autonomous' });
+const applierFor = (root) => new Applier({ projectRoot: root, dataDir: join(root, '.watchdog'), autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
 
 test('the npm-install-failed rule no longer emits a raw command', () => {
   const f = evaluate('npm ERR! code ELIFECYCLE')[0];

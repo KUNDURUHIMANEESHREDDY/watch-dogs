@@ -303,7 +303,7 @@ test('never installs into a global interpreter without a project venv', async ()
   mkdirSync(data, { recursive: true });
   // Declared, so the allowlist passes; only the venv gate can stop this.
   writeFileSync(join(root, 'requirements.txt'), 'requests>=2.31.0\n');
-  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
+  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
   // ecosystem is what the python-modulenotfound rule emits.
   const r = await a.applyAsync({ kind: 'install-deps', package: 'requests', ecosystem: 'python' }, { cwd: root });
   assert.equal(r.status, 'skipped', JSON.stringify(r));
@@ -314,7 +314,7 @@ test('the allowlist is checked before anything else', async () => {
   const root = tmp();
   const data = join(root, '.watchdog');
   mkdirSync(data, { recursive: true });
-  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
+  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
   const r = await a.applyAsync({ kind: 'install-deps', package: 'requests', ecosystem: 'node' }, { cwd: root });
   assert.equal(r.status, 'skipped');
   // The allowlist is the outer gate: an undeclared package is refused even when
@@ -330,7 +330,7 @@ test('an install with no ecosystem is refused rather than guessed', async () => 
   mkdirSync(data, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { requests: '^1.0.0' } }));
   writeFileSync(join(root, 'requirements.txt'), 'requests>=2.31.0\n');
-  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
+  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
   const r = await a.applyAsync({ kind: 'install-deps', package: 'requests' }, { cwd: root });
   assert.equal(r.status, 'skipped');
   assert.match(r.why, /did not say which ecosystem/);
@@ -342,7 +342,7 @@ test('targets a project virtualenv when one exists', async () => {
   mkdirSync(data, { recursive: true });
   mkdirSync(join(root, '.venv', 'Scripts'), { recursive: true });
   writeFileSync(join(root, '.venv', 'Scripts', 'python.exe'), '');
-  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
+  const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'allowlist', allowlist: ['install-deps', 'repair-deps', 'command'] });
   const r = await a.applyAsync({ kind: 'install-deps', package: 'requests' }, { cwd: root });
   // The venv python is an empty stub, so this must not fall back to a global install.
   assert.doesNotMatch(r.why ?? '', /global interpreter/);

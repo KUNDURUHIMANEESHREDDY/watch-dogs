@@ -10,6 +10,10 @@ import { realpathNearest, realProjectRoot } from './containment.mjs';
 import { checkCommand, CMD_REFUSAL } from './commands.mjs';
 
 export const REFUSAL = Object.freeze({
+  // Raised by the autonomy policy rather than by the pattern guard. Kept in this
+  // table because it shares the vocabulary the journal and `describeRefusal` speak,
+  // not because anything pattern-matched to produce it.
+  IRREVERSIBLE: 'irreversible_without_opt_in',
   // Re-exported from the policy module rather than restated, so the code the
   // guard publishes is by construction the code `describeRefusal` can look up.
   COMMAND_NOT_ALLOWED: CMD_REFUSAL.NOT_ALLOWED,

@@ -489,6 +489,58 @@ The requirement is declared on the program (`requiresLocalBinary`) rather than
 special-cased, and a test asserts that every program which can fetch declares it
 - so a future `bunx` or `uvx` added to the policy cannot forget.
 
+## Dependency repair is not autonomous, and the reason is the undo
+
+An audit asked for "an isolated dependency-install execution environment" and
+treated its absence as a blocker. Reading the code, that framing does not hold up.
+
+**What actually executes.** `repairArgv` is `npm ci --ignore-scripts`, not
+`npm install`. `ci` reproduces the lockfile rather than resolving, so it cannot pull
+a version the project did not already pin. Every install carries `--ignore-scripts`,
+or `--only-binary=:all:` for Python, so **no third-party code runs at all**.
+"Package installation is inherently code execution" is not true of this path.
+
+**What is actually left** is a different problem, and a worse one than the objection
+it replaces. `npm ci` deletes `node_modules` and rebuilds it -- the widest blast
+radius of any action here -- and a command is journalled as unreversible, so
+`wd rollback` refuses it by design. Every other autonomous action records a
+preimage and can be put back.
+
+So the dependency action was the **only** thing this program would do unattended
+and be unable to undo. A container would not have changed that. The two problems
+are orthogonal: isolation and reversibility are different properties, and this one
+lacked the second.
+
+Dependency actions are therefore refused under `autonomous`, with the refusal
+naming that reason rather than blaming install scripts -- which do not run here, and
+saying they did would teach the reader the wrong model of their own risk.
+
+They remain available under `allowlist`, where the user names the kind:
+
+```
+wd init --allowlist        # then list repair-deps to opt in by name
+```
+
+That is stricter consent than a confirmation prompt, because it is a standing
+decision recorded in config. Nothing new was invented; the loosest tier was simply
+stopped from implying the tighter ones.
+
+The boundary this draws is worth stating plainly: **everything the watchdog does
+autonomously, it can undo**, with dependency repair as the one named exception you
+have to opt into.
+
+Four tests were asserting that autonomous installs succeed. Their intent was the
+install *policy* -- undeclared packages refused, scripted projects refused, no venv
+refused -- so they now opt in by naming the kind, which is how a real user does it.
+One sandbox walkthrough narrated "the allowlist REFUSES" while the actual stop had
+become the autonomy policy; it now names the kind too, so the hop it demonstrates
+is the hop that fires. That demo claiming credit for a refusal it did not cause was
+the same failure as the stale README bullet, in a script this time.
+
+The package allowlist's own refusal also left no journal entry, which made it the
+one refusal that was both the most important and the least reviewable. It is
+recorded now, with the package name.
+
 ## Dependency repair does not hand a package your credentials
 
 Repair already decided *which* package to install: it must be declared, the
