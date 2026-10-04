@@ -42,6 +42,34 @@ const ADVISOR_DOWN = new Set(['unavailable', 'timeout', 'failed', 'unparseable']
 const MAX_TRACKED_BUDGET_SESSIONS = 500;
 
 /**
+ * The one-line summary of an applied model fix, chosen by what verification proved.
+ *
+ * This used to be the constant "applied after passing the project's own
+ * verification", which reads as though the repair had been verified. It had not been.
+ * The project's checks passing says the edit is not harmful; it says nothing about
+ * the reported error unless the checks cover it, and this program has no way to know
+ * whether they do.
+ *
+ * So the line states the transition, and in the common case says outright that the
+ * repair is unproven. A user reading "applied" deserves to know which of the two
+ * things happened.
+ */
+function appliedReason(evidence) {
+  switch (evidence) {
+    case 'repaired':
+      return "applied: the project was failing its own verification before this edit and passes with it";
+    case 'broke':
+    case 'inconclusive':
+      return 'applied, but verification did not support it -- see the verification reason';
+    case 'unknown':
+      return 'applied: it does not break the project checks, but they were not compared against the state before the edit';
+    case 'not-broken':
+    default:
+      return "applied: it did not break a project that was already passing its own checks. That is not proof the reported error is fixed";
+  }
+}
+
+/**
  * Default cap on the findings log, before rotation.
  *
  * Larger than the daemon log's 2MB, because findings are records rather than
@@ -391,10 +419,13 @@ export class Watcher extends EventEmitter {
         verifyCfg: this.verifyCfg,
       });
     } catch (e) {
-      verdict = { verdict: 'unverified', why: `verification could not be completed: ${e.message}` };
+      verdict = { verdict: 'unverified', evidence: 'unknown', why: `verification could not be completed: ${e.message}` };
     }
 
-    rec.advisor.verification = { verdict: verdict.verdict, why: verdict.why };
+    // `evidence` travels with the verdict, so nothing downstream can read a bare
+    // `pass` and take it for a repair. See the note on EVIDENCE in verify.mjs: a
+    // level is not a transition, and only the transition is evidence.
+    rec.advisor.verification = { verdict: verdict.verdict, evidence: verdict.evidence ?? 'unknown', why: verdict.why };
 
     if (verdict.verdict !== 'pass') {
       rec.advisor.acted = false;
@@ -438,9 +469,7 @@ export class Watcher extends EventEmitter {
     const counts = aggregate(results);
     rec.applied = { status: counts.status, files: results };
     rec.advisor.acted = counts.allApplied;
-    rec.advisor.why = counts.allApplied
-      ? 'applied after passing the project\'s own verification'
-      : counts.summary;
+    rec.advisor.why = counts.allApplied ? appliedReason(verdict.evidence) : counts.summary;
 
     if (!counts.allApplied) {
       rec.advisor.requiresHuman = true;

@@ -238,14 +238,52 @@ export async function runVerifier(stage, verifyCfg) {
 }
 
 /**
+ * What a verification result is allowed to claim.
+ *
+ * The gap this closes is not hypothetical. Verification used to run only *after* the
+ * edit, and `pass` was reported as "the project passes its own verification". With
+ * no baseline that sentence is true and useless, because it is equally true of a
+ * project that was already broken and stayed broken -- and of a project whose checks
+ * do not cover the reported error, which passes with any edit at all.
+ *
+ * So the check runs twice, on the staged tree before and after, and what is reported
+ * is the *transition* rather than the level. A transition is evidence; a level is not.
+ *
+ *   repaired      failing -> passing. The strongest thing this program can prove,
+ *                 and still only about the project's own check -- not proof that the
+ *                 cause of the reported error was understood.
+ *   not-broken    passing -> passing. The edit did no harm. Says nothing whatever about
+ *                 whether the reported error is fixed, and must never be reported as
+ *                 though it did.
+ *   broke         passing -> failing. A regression.
+ *   inconclusive  failing -> failing. The project was already broken elsewhere, so the
+ *                 result cannot be attributed to the edit in either direction.
+ *   unknown       the baseline could not be obtained, so no comparison was possible.
+ *
+ * `verdict` keeps its original three values, so nothing downstream changes meaning.
+ * The nuance rides alongside in `evidence`, which is additive.
+ *
+ * The cost is one extra verifier run per proposal, paid only when `verify.command` is
+ * configured. By default this program verifies nothing and applies nothing.
+ */
+const EVIDENCE = Object.freeze({
+  REPAIRED: 'repaired',
+  NOT_BROKEN: 'not-broken',
+  BROKE: 'broke',
+  INCONCLUSIVE: 'inconclusive',
+  UNKNOWN: 'unknown',
+});
+
+/**
  * Decide whether a set of proposed edits may be applied autonomously.
  *
- * @returns {Promise<{verdict: 'pass'|'fail'|'unverified', why: string, output?: string}>}
+ * @returns {Promise<{verdict: 'pass'|'fail'|'unverified', evidence?: string, why: string, output?: string}>}
  */
 export async function verifyProposals({ projectRoot, files, verifyCfg }) {
   if (!verifyCfg?.command) {
     return {
       verdict: 'unverified',
+      evidence: EVIDENCE.UNKNOWN,
       why:
         'no verification command is configured, so there is no way to prove this edit does not ' +
         'break the project. Set verify.command (for example ["npm","test"]) to allow model edits, ' +
@@ -261,48 +299,111 @@ export async function verifyProposals({ projectRoot, files, verifyCfg }) {
     return { verdict: 'unverified', why: `could not stage the project for checking: ${e.message}` };
   }
 
-  try {
+try {
+    // The baseline, taken before a single byte is edited.
+    //
+    // This is the measurement that was missing. Without it there is no way to tell
+    // "this edit fixed something" from "this edit did not break anything", and both
+    // were reported with the same word.
+    const baseline = await runVerifier(stage, verifyCfg);
+
     const { applied, failed, preimages: pre } = applyToStage(stage, files);
     preimages = pre;
     if (failed.length) {
       return {
         verdict: 'unverified',
+        evidence: EVIDENCE.UNKNOWN,
         why: `the edit does not apply cleanly: ${failed.map((f) => `${f.path} (${f.why})`).join('; ')}`,
       };
     }
     if (!applied.length) {
-      return { verdict: 'unverified', why: 'the proposal contained no edits to check' };
+      return { verdict: 'unverified', evidence: EVIDENCE.UNKNOWN, why: 'the proposal contained no edits to check' };
     }
 
-    // Cheap floor first. A test run is expensive and an edit that cannot parse
-    // has already failed, so the broken-file class is rejected without paying for
-    // the verifier.
+    // Cheap floor first. A test run is expensive and an edit that cannot parse has
+    // already failed, so the broken-file class is rejected without paying for the
+    // verifier a second time.
     const parse = parsesCleanly(stage, files);
     if (!parse.ok) {
-      return { verdict: 'fail', why: `the edit leaves the project unbuildable: ${parse.why}` };
+      return {
+        verdict: 'fail',
+        evidence: baseline.ok ? EVIDENCE.BROKE : EVIDENCE.INCONCLUSIVE,
+        why: `the edit leaves the project unbuildable: ${parse.why}`,
+      };
     }
 
     const result = await runVerifier(stage, verifyCfg);
-    if (result.skipped) return { verdict: 'unverified', why: 'no verification command is configured' };
+    if (result.skipped) return { verdict: 'unverified', evidence: EVIDENCE.UNKNOWN, why: 'no verification command is configured' };
     if (result.timedOut) {
       return {
         verdict: 'unverified',
+        evidence: EVIDENCE.UNKNOWN,
         why: `verification timed out after ${verifyCfg.timeoutMs ?? 300_000}ms, so the result is unknown rather than a pass`,
       };
     }
     if (result.spawnFailed) {
-      return { verdict: 'unverified', why: `verification could not be run: ${result.output}` };
+      return { verdict: 'unverified', evidence: EVIDENCE.UNKNOWN, why: `verification could not be run: ${result.output}` };
     }
+
+    // The baseline is a run of the same command, so it can time out or fail to start
+    // too. Those leave the transition unknowable, and saying so beats reporting a
+    // level as though it were a comparison.
+    const baselineKnown = !baseline.skipped && !baseline.timedOut && !baseline.spawnFailed;
+    const baselineNote =
+      'the project could not be checked before the edit, so this says nothing about whether the edit changed anything';
+
     if (!result.ok) {
+      if (baselineKnown && !baseline.ok) {
+        return {
+          verdict: 'fail',
+          evidence: EVIDENCE.INCONCLUSIVE,
+          why:
+            'the project was already failing its own verification before this edit, and still is. ' +
+            'That result cannot be attributed to the edit in either direction. Get the project passing ' +
+            'first, or fix the failing check, so that a verdict here would mean something.',
+          output: result.output,
+        };
+      }
       return {
         verdict: 'fail',
-        why: 'the project does not pass its own verification with this edit applied',
+        evidence: baselineKnown ? EVIDENCE.BROKE : EVIDENCE.UNKNOWN,
+        why: baselineKnown
+          ? 'the edit leaves the project failing a check it was passing before'
+          : `the project does not pass its own verification with this edit applied, and ${baselineNote}`,
         output: result.output,
       };
     }
+
+    if (baselineKnown && !baseline.ok) {
+      return {
+        verdict: 'pass',
+        evidence: EVIDENCE.REPAIRED,
+        why:
+          'the project failed its own verification before this edit and passes with it applied. That is ' +
+          'the strongest evidence available here, and it is still only about the project\'s own check -- ' +
+          'not proof that the cause of the reported error was understood.',
+        preimages,
+      };
+    }
+
+    if (baselineKnown) {
+      return {
+        verdict: 'pass',
+        evidence: EVIDENCE.NOT_BROKEN,
+        why:
+          'the project passed its own verification before this edit and still does. That shows the edit ' +
+          'did not break anything. It is not evidence that the reported error is fixed -- a project\'s ' +
+          'checks pass whether or not they cover the problem that was reported.',
+        preimages,
+      };
+    }
+
     return {
       verdict: 'pass',
-      why: 'the project passes its own verification with this edit applied',
+      evidence: EVIDENCE.UNKNOWN,
+      why:
+        `the project passes its own verification with this edit applied, but ${baselineNote}, so this is ` +
+        'not evidence of a repair.',
       preimages,
     };
   } finally {

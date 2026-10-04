@@ -781,6 +781,62 @@ refusals thoroughly and had no coverage of this path at all, which is why the bu
 survived. `writeFd` remains exported for tests only, and one of them now asserts
 that a containment handle refuses a write at the descriptor.
 
+## Verification proves a transition, not a repair
+
+An audit objected that verification proves *"this version passes the project's
+configured check"* and not *"the model repaired the original problem correctly"*.
+Both halves of that were true, and the second one was the defect.
+
+Verification ran **only after** the edit. `pass` was reported as "the project passes
+its own verification with this edit applied" -- a sentence that is equally true of
+
+- a project whose checks never covered the reported error, and
+- a project that was already broken and stayed broken.
+
+There was no measurement of the state *before* the edit, so "this fixed something"
+and "this broke nothing" came back with the same word. The watcher comment even said
+`pass` means the project *"still"* passes, which is honest internally and
+misleading in the verdict name.
+
+The missing baseline produced errors in **both** directions:
+
+- **false positive** -- an unrelated edit on a passing project read as a repair.
+- **false negative** -- a correct edit on an *already failing* project was rejected,
+  because the project was broken for an unrelated reason and the message said the
+  edit broke it. That one had no test at all.
+
+So the check now runs twice, on the staged tree before and after, and what is
+reported is the transition:
+
+| evidence | before -> after | claim |
+|---|---|---|
+| `repaired` | failing -> passing | strongest available; still only about the project's own check |
+| `not-broken` | passing -> passing | the edit did no harm; says nothing about the reported error |
+| `broke` | passing -> failing | a regression |
+| `inconclusive` | failing -> failing | already broken elsewhere; not attributable in either direction |
+| `unknown` | -- | the baseline could not be obtained, so no comparison was possible |
+
+`verdict` keeps its original three values so nothing downstream changes meaning. The
+nuance rides alongside in `evidence`, which is additive.
+
+The summary line a user reads was `"applied after passing the project's own
+verification"`, which reads as though the repair had been verified. In the common
+case it now says the opposite of what it used to imply:
+
+> applied: it did not break a project that was already passing its own checks. That
+> is not proof the reported error is fixed
+
+This cannot be fixed by better staging. Whether the project's checks *cover* the
+reported error is not something this program knows, and `not-broken` is the honest
+name for that. The cost is one extra verifier run per proposal, paid only when
+`verify.command` is configured -- by default this program verifies nothing and
+applies nothing.
+
+A test asserts the ordering rather than trusting it: a check script that only passes
+on its **second** invocation. That can only be satisfied by two runs with the
+baseline first. Mutation-checked -- faking the baseline as always-passing fails 3
+tests, including `repaired` and the false-negative case.
+
 ## Proving an edit before making it
 
 Confidence is not correctness. An LLM edit used to be authorised by:
