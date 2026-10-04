@@ -279,11 +279,11 @@ to the cloud instead, no extra flag.
 
 Staged verification copies the project, applies the proposal to the copy, and runs
 the project's own checks. What comes back is a statement about a **version** of a
-file — but nothing recorded *which* version, so between the check and the write
+file - but nothing recorded *which* version, so between the check and the write
 the file can change: a build regenerating it, an editor autosaving, you typing.
 
 The obvious defence doesn't work. `#patchFile` already refuses when the `find`
-anchor is missing. The failure mode isn't a missing anchor — it's a *newer* file
+anchor is missing. The failure mode isn't a missing anchor - it's a *newer* file
 that still contains the same anchor. The edit applies cleanly, parses cleanly, and
 lands in a version of the code nobody looked at.
 
@@ -296,7 +296,7 @@ apply    ->  sha256(bytes just read)              must match, or `stale`
 ```
 
 The comparison hashes the content read through the validated descriptor, not the
-path — hashing a path would reintroduce the "the object at this path may have
+path - hashing a path would reintroduce the "the object at this path may have
 changed" problem the handle validation exists to solve.
 
 It lives **inside** `#patchFile` rather than in the caller. A precondition a caller
@@ -311,7 +311,7 @@ found 7c8d9e0f1a2b...). The fix was proved against a different version of this
 file, so it was not applied. Re-run the check against the current file.
 ```
 
-Rule-driven fixes pass no `expectPreimage` and are unaffected — they're reviewed
+Rule-driven fixes pass no `expectPreimage` and are unaffected - they're reviewed
 by the rule's author and never go through staged verification.
 
 ## Dependency repair does not hand a package your credentials
