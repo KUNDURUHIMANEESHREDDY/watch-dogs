@@ -185,6 +185,21 @@ export class Watcher extends EventEmitter {
   }
 
   /**
+   * Give back a charge for a review this session did not actually cause.
+   *
+   * The budget is charged before the advisor is asked, so the per-session cap
+   * cannot be overshot by concurrent requests. But a request that joined a review
+   * already in flight spent nothing, and paying for it is wrong twice over: the
+   * session is billed for a call it did not make, and its remaining allowance is
+   * spent on a question somebody else already answered.
+   */
+  #refund(sessionId) {
+    const key = sessionId ?? '';
+    const now = this.#spent(key);
+    if (now <= 0) return;
+    this.#llmBudget.set(key, now - 1);
+  }
+  /**
    * Feed one captured line. Returns the findings the rules produced; LLM work is
    * fire-and-forget and reports back via events.
    */
@@ -286,8 +301,16 @@ export class Watcher extends EventEmitter {
       cfg: this.#cfg,
       sessionId: rec.sessionId,
     });
+    // A coalesced review cost this session nothing, so it is not charged. The
+    // charge happens before the advisor is called, which keeps the per-session cap
+    // honest under concurrency; this is the correction once we know what actually
+    // happened. It still gets the answer -- the alternative was being told `busy`
+    // and learning nothing.
+    if (advice.coalesced) this.#refund(rec.sessionId);
+
     rec.advisor = {
       pending: false,
+      coalesced: advice.coalesced === true,
       verdict: advice.verdict,
       confidence: advice.confidence,
       summary: advice.summary,

@@ -10,6 +10,7 @@ import { traceAdvisorReview } from '../observe/trace.mjs';
 import { existsSync, readdirSync } from 'node:fs';
 import { traceTarget } from './tracepaths.mjs';
 import { join, resolve, relative, basename, sep } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const SYSTEM_PROMPT = `You are a build-log triage assistant. Given terminal output, decide whether there is a real, actionable problem.
 
@@ -25,7 +26,8 @@ export class Advisor {
   #cli;
   #model;
   #timeoutMs;
-  #inFlight = new Set();
+  /** key -> the promise of the review already running for it. */
+  #inFlight = new Map();
 
   constructor({ cli = 'opencode', model = null, timeoutMs = 180_000 } = {}) {
     this.#cli = resolveCli(cli);
@@ -42,24 +44,48 @@ export class Advisor {
    */
   async review({ evidence, cwd, title, sessionId, cfg }) {
     if (!this.available()) return err('no cli configured', 'unavailable');
-    const key = `${cwd}::${title}`;
-    if (this.#inFlight.has(key)) return err('review already in flight for this signature', 'busy');
-    this.#inFlight.add(key);
+
+    // What counts as "the same finding".
+    //
+    // This used to be `${cwd}::${title}`, which is wrong in both directions. Two
+    // terminals in one directory hitting the same error title collided and the
+    // second was told `busy` -- so it got no opinion at all and its finding stayed
+    // pending forever. But two *different* faults sharing a message ("ReferenceError:
+    // count is not defined" from two different files) also collided, and only one
+    // was ever reviewed.
+    //
+    // Evidence is part of the key because it is the difference between those two
+    // cases. The same fault seen from two terminals produces the same evidence and
+    // should be answered once; two faults sharing a message do not, and each
+    // deserves its own answer.
+    //
+    // A colliding request does not get dropped. It awaits the review already in
+    // flight and receives that answer, tagged `coalesced` so the caller can avoid
+    // paying for a call it did not make. With a non-deterministic model, asking
+    // the same question twice buys two different answers to one question, which is
+    // worse than one answer.
+    const key = findingSignature({ cwd, title, evidence });
+    const joined = this.#inFlight.get(key);
+    if (joined) return { ...(await joined), coalesced: true };
 
     // Tracing wraps the whole review, including the failure paths, because "we
     // never got to ask the model" is exactly the kind of thing the traces exist
     // to show. It is a no-op unless Langfuse is configured, and it cannot change
     // the result either way.
-    try {
-      return await traceAdvisorReview({
+    // Registered before awaiting anything, so two callers arriving in the same tick
+    // cannot both decide they are first.
+    const run = traceAdvisorReview({
         cfg,
         sessionId,
         title,
         cwd,
         model: this.#model,
         evidence,
-        run: () => this.#reviewInner({ evidence, cwd, title }),
-      });
+      run: () => this.#reviewInner({ evidence, cwd, title }),
+    });
+    this.#inFlight.set(key, run);
+    try {
+      return await run;
     } finally {
       this.#inFlight.delete(key);
     }
@@ -352,4 +378,27 @@ export function resolveProposedPath(proposed, cwd) {
 
 function err(message, status = 'failed') {
   return { verdict: 'unsure', confidence: 0, summary: message, fix: null, raw: '', status, error: message };
+}
+/**
+ * Identity of a finding, for deciding whether a review is already under way.
+ *
+ * Evidence is included because it is what separates the two cases that matter: the
+ * same fault surfacing in two terminals, and two different faults whose messages
+ * happen to match. The first should be answered once, the second twice.
+ *
+ * Whitespace and line endings are normalised first. The same error re-emitted by
+ * two shells differs in trailing newlines and indentation often enough that a raw
+ * hash would treat one fault as several, which is the failure mode this key
+ * exists to avoid -- paying twice for one question.
+ */
+export function findingSignature({ cwd, title, evidence }) {
+  const norm = String(evidence ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim();
+  return [
+    String(cwd ?? ''),
+    String(title ?? '').trim().toLowerCase(),
+    createHash('sha256').update(norm, 'utf8').digest('hex').slice(0, 16),
+  ].join('::');
 }
