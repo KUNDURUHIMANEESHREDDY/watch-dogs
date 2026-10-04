@@ -1250,11 +1250,30 @@ is not there.
 - **Rules judge one line at a time.** A multi-line stack trace is judged as N
   independent lines. Fine for today's rules; it will need context for anything that
   spans several lines.
-- **Recovery is on next shell start, not automatic.** The Startup-folder launcher
-  starts the daemon at logon but cannot restart it after a crash; what heals a
-  crash is the heartbeat check in your shell profile, which fires the next time
-  you open a terminal. Until then `wd status` is the only thing that tells you
-  whether coverage is real. See Autostart above.
+- **Recovery is on next shell start, and there is no non-elevated way to do
+  better.** The Startup-folder launcher starts the daemon at logon but cannot restart
+  it after a crash; what heals a crash is the heartbeat check in your shell profile,
+  which fires the next time you open a terminal. Until then `wd status` is the only
+  thing that tells you whether coverage is real.
+
+  This was measured rather than assumed, and the answer is a platform boundary.
+  Registering a Scheduled Task on this machine returns *Access is denied* without
+  elevation -- not just the restart settings, any task at all. And restart-on-failure
+  is what real supervision requires: a task that starts the daemon at logon and does
+  nothing when it dies is not a supervisor.
+
+  So the Scheduled Task is **no longer preferred**, which reverses an earlier
+  decision. It was preferred on the belief that a task supervises better than a
+  Startup-folder entry, and it does not: the task carried no restart-on-failure
+  settings and reported `restarts: false`, while the Startup-folder path reported
+  `restarts: true` because the shell profile relaunches a stale daemon. Both install
+  that profile, so recovery was identical. What preferring the task actually bought
+  was a machine-wide artifact that needs elevation to create *and* to remove, in
+  exchange for nothing.
+
+  The task path is kept behind an explicit opt-in for a future elevated install that
+  can turn restart-on-failure on and report the result honestly. It is not a
+  hardening step that was skipped; on this machine it is not reachable.
 
 ## Rules with no fix, on purpose
 

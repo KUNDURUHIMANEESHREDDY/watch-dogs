@@ -74,7 +74,36 @@ export function buildLauncherForTest(nodeExe, entry) {
 /**
  * @param {{nodeExe:string, entry:string, preferTask?:boolean}} opts
  */
-export function installAutostart({ nodeExe, entry, preferTask = true }) {
+/**
+ * Register the daemon to start at logon.
+ *
+ * `preferTask` defaults to false, and it used to default to true.
+ *
+ * A Scheduled Task was preferred because a task "supervises better than a Startup
+ * folder entry". Measured on this machine, that is not true in any respect that
+ * matters:
+ *
+ *   - Registering *any* task here is `Access is denied` without elevation. So the
+ *     preference only ever applied to an elevated install.
+ *   - The task was created without restart-on-failure settings, and said so --
+ *     `restarts: false`, with a warning that a crash still needs a manual restart.
+ *   - The Startup-folder path reported `restarts: true`, because the shell profile
+ *     relaunches a stale daemon. Both paths install that profile. So the two
+ *     mechanisms had identical recovery behaviour, and the task was worse on the
+ *     only dimension either of them acts on.
+ *
+ * What preferring it actually bought: a machine-wide artifact that needs elevation
+ * to create and elevation to remove, in exchange for nothing.
+ *
+ * Real supervision -- restarting the daemon when it dies rather than when you next
+ * open a terminal -- needs `<RestartOnFailure>` in the task's settings, and that is
+ * not reachable without elevation on this machine either. That is a platform
+ * boundary, like the ConPTY layer and layer-2 exit codes, and it is documented as one
+ * rather than papered over. The task path is kept so that a future elevated install
+ * can turn restart-on-failure on and be honest about the result, but it is no longer
+ * preferred for a benefit it does not provide.
+ */
+export function installAutostart({ nodeExe, entry, preferTask = false }) {
   const warnings = [];
 
   if (preferTask && isElevated()) {
@@ -89,8 +118,13 @@ export function installAutostart({ nodeExe, entry, preferTask = true }) {
       return {
         mechanism: 'scheduled-task',
         detail: TASK_NAME,
+        // Accurate, and the reason this is not the default. The shell profile still
+        // heals a crash on the next terminal either way; the task adds no restart
+        // behaviour of its own.
         restarts: false,
-        warnings: ['Created without restart-on-failure settings; a crash will still need a manual restart.'],
+        warnings: [
+          'Created without restart-on-failure settings, so a crash is still healed by the shell profile on the next terminal rather than by this task. Restart-on-failure needs an elevated install and is not configured here.',
+        ],
       };
     } catch (e) {
       warnings.push(`scheduled task creation failed (${String(e.message).split('\n')[0]}); falling back to the Startup folder`);

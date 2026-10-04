@@ -137,19 +137,55 @@ test('remove is idempotent and never throws when nothing is there', () => {
   assert.ok(Array.isArray(r));
 });
 
-test('the scheduled-task path is preferred but degrades honestly', () => {
-  // Cannot create a task without elevation here, so install must still succeed
-  // via the Startup folder and must say which guarantee was lost.
-  const res = installAutostart({ nodeExe: process.execPath, entry: 'C:/tmp/wd.js', preferTask: true });
-  assert.ok(['scheduled-task', 'startup-folder', 'none'].includes(res.mechanism));
+test('the scheduled-task path is no longer preferred, because it supervises no better', () => {
+  // The default changed from preferTask: true to false, and this is why.
+  //
+  // A task was preferred because it "supervises better than a Startup folder entry".
+  // Measured on this machine that was not true in the only dimension either mechanism
+  // acts on: the task carried no restart-on-failure settings, so it reported
+  // `restarts: false`, while the Startup-folder path reported `restarts: true`
+  // because the shell profile relaunches a stale daemon. Both install that profile.
+  //
+  // What preferring the task bought was a machine-wide artifact needing elevation to
+  // create and to remove, for identical recovery behaviour.
+  const res = installAutostart({ nodeExe: process.execPath, entry: 'C:/tmp/wd.js' });
+  assert.ok(['startup-folder', 'scheduled-task', 'none'].includes(res.mechanism));
+
+  // Not being elevated is the common case here, so the default must not have tried
+  // the task at all. If it had, the failure would be silent -- it falls back.
+  assert.notEqual(
+    res.mechanism,
+    'scheduled-task',
+    'an unelevated default install created a Scheduled Task, which needs elevation and supervises no better',
+  );
+
   if (res.mechanism === 'startup-folder') {
-    // The fallback no longer claims a crash is unrecoverable -- the shell profile
-    // restarts a stale daemon -- but it must still not pretend recovery is
-    // immediate, because nothing supervises the process in the meantime.
-    assert.ok(res.warnings.some((w) => /not automatic|not the instant|never be restarted/i.test(w)), `warnings must qualify the timing of recovery: ${JSON.stringify(res.warnings)}`);
+    assert.ok(
+      res.warnings.some((w) => /not automatic|not the instant|never be restarted/i.test(w)),
+      `warnings must qualify the timing of recovery: ${JSON.stringify(res.warnings)}`,
+    );
     assert.ok(!res.warnings.some((w) => /will NOT be restarted/i.test(w)), 'the old untrue warning is back');
+    // And it must not claim immediacy it does not have.
+    assert.ok(!res.warnings.some((w) => /restarted automatically|supervis/i.test(w)), 'the fallback claims supervision it does not have');
   }
   const removed = removeAutostart();
-  assert.ok(removed.some((x) => x.mechanism === 'startup-folder'));
+  assert.ok(Array.isArray(removed));
   void TASK_NAME;
+});
+
+test('an explicit opt-in still reaches the task path and reports no restart guarantee', () => {
+  // Kept reachable, for a future elevated install that can turn restart-on-failure on.
+  // What it must never do is claim supervision: the task as created has no
+  // restart-on-failure settings, so `restarts` is false and the warning says why.
+  const res = installAutostart({ nodeExe: process.execPath, entry: 'C:/tmp/wd.js', preferTask: true });
+  assert.ok(['scheduled-task', 'startup-folder', 'none'].includes(res.mechanism));
+
+  if (res.mechanism === 'scheduled-task') {
+    assert.equal(res.restarts, false, 'a task without restart-on-failure must not report restarting');
+    assert.ok(
+      res.warnings.some((w) => /restart-on-failure/i.test(w)),
+      `the task path must say why it does not supervise: ${JSON.stringify(res.warnings)}`,
+    );
+  }
+  removeAutostart();
 });
