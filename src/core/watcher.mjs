@@ -9,6 +9,7 @@ import { evaluate, severityAtLeast, SEVERITY } from '../analyze/rules.mjs';
 import { Advisor } from '../analyze/advisor.mjs';
 import { Applier } from '../act/apply.mjs';
 import { verifyProposals } from '../act/verify.mjs';
+import { canonicalizeFix } from './paths.mjs';
 import { redact } from '../capture/stream.mjs';
 import { log } from '../core/log.mjs';
 
@@ -332,13 +333,38 @@ export class Watcher extends EventEmitter {
    *   unverified  there was no way to check; do not apply autonomously
    */
   async #applyLlmFix(rec, advice) {
-    const files = advice.fix.files ?? [];
+    // Replaced by the canonical form below before anything is verified or written.
+
+    // Canonicalise once, here, at the edge.
+    //
+    // The proposal's paths are relative to the session that produced them, while
+    // the staged copy is made from the project root. Resolving the same string
+    // twice -- once against the root for verification, once against the session
+    // for the write -- meant a monorepo session could verify one file and change
+    // another. `src/index.js` verified C:\repo\src\index.js and wrote
+    // C:\repo\packages\api\src\index.js.
+    //
+    // So the same canonical string is used for both, and the write is made
+    // against the project root rather than the session directory.
+    const { files: canonical, rejected } = canonicalizeFix(advice.fix, rec.cwd ?? this.projectRoot, this.projectRoot);
+
+    if (rejected.length) {
+      rec.advisor.verification = {
+        verdict: 'unverified',
+        why: `refused ${rejected.length} proposed path(s) that resolve outside the project: ${rejected.map((r) => r.path).join(', ')}`,
+      };
+      rec.advisor.acted = false;
+      rec.advisor.requiresHuman = true;
+      rec.advisor.why = rec.advisor.verification.why;
+      this.emit('needs-human', rec);
+      return;
+    }
 
     let verdict;
     try {
       verdict = await verifyProposals({
         projectRoot: this.projectRoot,
-        files,
+        files: canonical,
         verifyCfg: this.verifyCfg,
       });
     } catch (e) {
@@ -359,14 +385,17 @@ export class Watcher extends EventEmitter {
     }
 
     const results = [];
-    for (const file of files) {
+    for (const file of canonical) {
       results.push(
-        // source: 'llm' so the guard applies the file-class policy. Without it
-        // the model could rewrite a CI workflow or a package manifest here,
-        // because the existing rails only ask whether the path is forbidden.
+        // `cwd: this.projectRoot`, not `rec.cwd`. The path is project-root-relative
+        // now, so resolving it against the session directory would put it back
+        // exactly where it started. source: 'llm' so the guard applies the
+        // file-class policy -- without it the model could rewrite a CI workflow or
+        // a package manifest here, because the existing rails only ask whether
+        // the path is forbidden.
         this.#applier.apply(
           { kind: 'patch-file', path: file.path, find: file.find, replace: file.replace },
-          { cwd: rec.cwd, source: 'llm' },
+          { cwd: this.projectRoot, source: 'llm' },
         ),
       );
     }
