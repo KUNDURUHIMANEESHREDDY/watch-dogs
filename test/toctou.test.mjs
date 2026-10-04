@@ -17,7 +17,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, openSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -174,38 +174,90 @@ test('a refused open does not leak descriptors', () => {
 });
 
 /* ------------------------------------------------------------------ *
- * Reading and writing through one descriptor
+ * The handle is read-only, and that is the guarantee
  * ------------------------------------------------------------------ */
 
-test('writing a shorter body truncates rather than leaving a tail', () => {
-  // The classic descriptor-write bug. The read left the position at end of file,
-  // so writing at that position after a truncate appends into the hole and the
-  // file keeps the tail of its previous contents.
+test('openContained refuses to open for writing', () => {
+  // It used to accept 'r+' and both call sites passed it, on the theory that the
+  // descriptor was the safest way to do the edit. It never was used that way -- the
+  // content is replaced afterwards by an atomic rename -- so what 'r+' actually
+  // bought was a loaded write capability pointed at a validated inode. That is the
+  // capability a hardlink turns into an escape, because the inode is shared with
+  // whatever is outside the project.
+  //
+  // So it is refused at the boundary rather than merely left unused: a future caller
+  // cannot reintroduce the hole by forgetting to pass a different flag.
+  const root = project();
+  const path = join(root, 'src', 'a.js');
+  writeFileSync(path, 'one\n', 'utf8');
+
+  for (const flags of ['r+', 'w', 'a', 'rs+']) {
+    const r = openContained(root, 'src/a.js', { flags });
+    assert.equal(r.ok, false, `flags=${flags} was accepted`);
+    assert.equal(r.why, 'write-not-permitted', `flags=${flags} refused for the wrong reason`);
+  }
+
+  // A refused open must not have truncated anything on the way past.
+  assert.equal(readFileSync(path, 'utf8'), 'one\n');
+});
+
+test('a containment handle physically cannot be written to', () => {
+  // Stronger than checking which flags were requested: even a handle obtained by
+  // some other route must refuse a write at the descriptor. This is the property
+  // the whole hardlink argument rests on, so it is asserted directly rather than
+  // inferred from the flags.
+  const root = project();
+  const path = join(root, 'src', 'a.js');
+  writeFileSync(path, 'original\n', 'utf8');
+
+  const r = openContained(root, 'src/a.js');
+  assert.equal(r.ok, true, r.detail);
+  try {
+    writeFd(r.fd, 'clobbered\n');
+    assert.fail('the handle accepted a write');
+  } catch (e) {
+    // EBADF would mean the descriptor was not what we think it is. EPERM/EACCES is
+    // the answer we want: the descriptor is live and read-only.
+    assert.match(e.code, /^(EPERM|EACCES|EBADF)$/, `unexpected failure: ${e.code}`);
+  } finally {
+    safeClose(r.fd);
+  }
+
+  assert.equal(readFileSync(path, 'utf8'), 'original\n', 'the file changed despite the refused write');
+});
+
+test('writeFd truncates rather than leaving a tail, given a writable handle', () => {
+  // The helper keeps its own semantics under test, on a handle opened for writing
+  // here rather than through containment -- which no longer hands those out.
+  //
+  // This is the classic descriptor-write bug it exists to avoid: the read left the
+  // position at end of file, so writing at that position after a truncate appends
+  // into the hole and the file keeps the tail of its old contents.
   const root = project();
   const path = join(root, 'src', 'long.js');
   writeFileSync(path, 'AAAAAAAAAA\nBBBBBBBBBB\nCCCCCCCCCC\n', 'utf8');
 
-  const r = openContained(root, 'src/long.js');
-  assert.equal(r.ok, true);
-  readFd(r.fd, 'utf8'); // leaves the position at the end, which is the trap
-  writeFd(r.fd, 'short\n');
-  safeClose(r.fd);
-
+  const fd = openSync(path, 'r+');
+  try {
+    readFd(fd, 'utf8'); // leaves the position at the end, which is the trap
+    writeFd(fd, 'short\n');
+  } finally {
+    safeClose(fd);
+  }
   assert.equal(readFileSync(path, 'utf8'), 'short\n', 'the old tail survived the write');
-});
 
-test('writing a longer body appends nothing and loses nothing', () => {
-  const root = project();
-  const path = join(root, 'src', 'short.js');
+  // And the longer case: nothing appended, nothing lost.
   writeFileSync(path, 'tiny\n', 'utf8');
-
-  const r = openContained(root, 'src/short.js');
-  readFd(r.fd, 'utf8');
-  writeFd(r.fd, 'a much longer replacement body\nsecond line\n');
-  safeClose(r.fd);
-
+  const fd2 = openSync(path, 'r+');
+  try {
+    readFd(fd2, 'utf8');
+    writeFd(fd2, 'a much longer replacement body\nsecond line\n');
+  } finally {
+    safeClose(fd2);
+  }
   assert.equal(readFileSync(path, 'utf8'), 'a much longer replacement body\nsecond line\n');
 });
+
 
 /* ------------------------------------------------------------------ *
  * The journal records what was actually patched

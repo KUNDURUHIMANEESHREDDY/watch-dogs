@@ -26,9 +26,28 @@
  *     at that path can be replaced. `openContained` below closes that by checking
  *     the identity of the object it actually holds a handle to.
  *
- * Hardlinks remain invisible: a hardlink inside the project to a file outside it
- * reports the in-project path from every API, and its identity is that of the
- * original. Nothing path-based can see it.
+ * Hardlinks are now closed too, and the fix was to remove the capability rather
+ * than to detect the attack.
+ *
+ *   project/src/data.js -> C:\elsewhere\secret.txt   (hardlink)
+ *
+ * Every path-based check passes: the path is inside the project, realpath agrees,
+ * and `ino`/`dev` match the outside file, because they *are* the outside file. A
+ * hardlink is not an indirection to be resolved -- it is a second name for one
+ * inode, and no amount of resolving tells you where the other names point.
+ *
+ * So containment no longer grants write access at all. `openContained` opens
+ * read-only, and refuses any handle whose link count is above 1. Content is
+ * replaced by `atomicReplaceIfUnchanged`, which renames a new file over the
+ * directory entry: the name inside the project is repointed, and any inode the
+ * project shared with the outside world keeps its own bytes untouched. That is
+ * strictly safer than writing through a handle, and it needed no way to enumerate
+ * hardlinks.
+ *
+ * Closing the link count is belt-and-braces for the day something writes through a
+ * descriptor again. Verified as reachable on this machine without elevation:
+ * `fsutil hardlink create` succeeds and both names report the same ino with
+ * nlink=2.
  */
 import { realpathSync, lstatSync, fstatSync, openSync, closeSync, readFileSync, writeSync, ftruncateSync } from 'node:fs';
 import { resolve, relative, isAbsolute, join, dirname, basename } from 'node:path';
@@ -135,7 +154,27 @@ export function sameFile(a, b) {
  * by inspection -- only by being able to exercise it. It takes no part in
  * production behaviour.
  */
-export function openContained(root, target, { flags = 'r+', onChecked } = {}) {
+export function openContained(root, target, { flags = 'r', onChecked } = {}) {
+  // Write access is not available here at all.
+  //
+  // This used to default to 'r+' and both call sites passed 'r+' explicitly, on the
+  // theory that the descriptor was the safest way to do the edit. It never was used
+  // that way: the only operations through the handle were reads, and the content was
+  // replaced afterwards by an atomic rename. What 'r+' actually did was leave a
+  // loaded write capability pointed at a validated inode, one refactor away from
+  // being used -- and a write through a handle is the one operation a hardlink can
+  // turn into an escape, since the inode is shared with whatever is outside.
+  //
+  // So the capability is gone rather than merely unused. Refusing here means a future
+  // caller cannot reintroduce the hole by forgetting a flag.
+  if (flags !== 'r') {
+    return {
+      ok: false,
+      why: 'write-not-permitted',
+      detail: `openContained grants read-only handles; refusing to open with flags=${JSON.stringify(flags)}`,
+    };
+  }
+
   const check = containedPath(root, target);
   if (!check.ok) return { ok: false, why: check.why, detail: `path resolves outside the project (${check.why})` };
   const abs = check.abs;
@@ -148,6 +187,7 @@ export function openContained(root, target, { flags = 'r+', onChecked } = {}) {
     return { ok: false, why: 'missing', detail: `cannot inspect ${abs}: ${e.message}` };
   }
   if (!before.isFile()) return { ok: false, why: 'not-a-file', detail: 'target is not a regular file' };
+  if (isHardlinked(before)) return { ok: false, why: 'hardlink', detail: hardlinkDetail(abs, before.nlink) };
 
   if (typeof onChecked === 'function') onChecked(abs);
 
@@ -177,6 +217,12 @@ export function openContained(root, target, { flags = 'r+', onChecked } = {}) {
     );
   }
 
+  // Re-checked on the handle rather than the path, because the handle is what any
+  // write would land on. See the note at the top of this file: a link count above 1
+  // means this inode also answers to a name somewhere outside the project, and there
+  // is no path-based way to find out where.
+  if (isHardlinked(opened)) return refuse('hardlink', hardlinkDetail(abs, opened.nlink));
+
   // A swap *after* the open is harmless to the bytes -- the descriptor is bound to
   // the object that was validated -- but it still means something else is rewriting
   // this tree concurrently, and the edit was computed from content that may no
@@ -190,6 +236,31 @@ export function openContained(root, target, { flags = 'r+', onChecked } = {}) {
   return { ok: true, fd, abs, real: check.real, stat: opened };
 }
 
+/**
+ * Does this stat refer to an inode with more than one name?
+ *
+ * Some filesystems report no link count at all, and report it as 0 or 1. Treating an
+ * unknown count as "one name" would be the optimistic reading, and this function's
+ * whole job is to be pessimistic about what it cannot see.
+ */
+function isHardlinked(st) {
+  if (typeof st.nlink !== 'number' || st.nlink === 0) return true; // unknown -> refuse
+  return st.nlink > 1;
+}
+
+function hardlinkDetail(abs, nlink) {
+  const seen = typeof nlink === 'number' ? `${nlink} names` : 'an unreported number of names';
+  // Deliberately does not say where the other names are. This function cannot know:
+  // they may all be inside the project, or one may be somewhere the watchdog has no
+  // way to reach. An earlier version of this message asserted "outside the project",
+  // which was a guess -- and a test that links two files inside the project caught it.
+  return (
+    `${abs} answers to ${seen}. Where the others point cannot be determined from inside the ` +
+    `project, so its bytes may be shared with a file that was not meant to be touched. ` +
+    `Refused rather than guessed at.`
+  );
+}
+
 /** Read a whole file through an already-open descriptor. */
 export function readFd(fd, encoding = 'utf8') {
   return readFileSync(fd, encoding);
@@ -197,6 +268,16 @@ export function readFd(fd, encoding = 'utf8') {
 
 /**
  * Replace a whole file's contents through an already-open descriptor.
+ *
+ * TEST ONLY. Nothing in the product writes through a handle, and that is the point
+ * -- see the note on `openContained`. This exists because the containment property
+ * being claimed is that a descriptor is bound to the object that was validated, and
+ * the only honest way to test that is to write through it and observe where the bytes
+ * land. If the handle followed a path swap, the test would see the bytes appear in
+ * the file that replaced it.
+ *
+ * It is exported rather than inlined into the test so that a future caller cannot
+ * reach it without the import showing up in a diff.
  *
  * Uses an explicit offset rather than `writeFileSync(fd, ...)`, because the
  * descriptor's position is wherever the last read left it -- at end of file --

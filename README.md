@@ -625,9 +625,76 @@ Two details that are easy to get wrong:
 - `sameFile` returns false when either `ino` is 0. Comparing two zeros would make
   every pair look identical, which is worse than admitting we cannot tell.
 
-**Still not closed:** hardlinks. A hardlink inside the project to a file outside
-it reports the in-project path from every API, and its identity *is* the
-original's. Nothing path-based can see it, and nothing here pretends otherwise.
+### Hardlinks: closed by removing the capability, not by detecting them
+
+A hardlink inside the project to a file outside it defeats every path-based check,
+and no amount of extra checking can fix that:
+
+```
+project/src/data.js  ->  C:\elsewhere\secret.txt   (hardlink)
+```
+
+The path is inside the project. `realpath` agrees. `ino` and `dev` match the
+outside file, because they **are** the outside file. A hardlink is not an
+indirection to be resolved -- it is a second name for one inode, and there is no
+portable way to enumerate the other names. Detection could never be complete, so
+this was closed structurally instead.
+
+`openContained` used to open with `r+`, and both call sites passed `r+`
+explicitly, on the theory that the descriptor was the safest way to do the edit.
+It never was used that way: the only operations through the handle were reads, and
+the content was replaced afterwards by `atomicReplaceIfUnchanged`. What `r+`
+actually did was leave a **loaded write capability pointed at a validated inode**
+-- one refactor away from being used, and a write through a handle is precisely
+what a hardlink turns into an escape.
+
+So the capability is gone rather than merely unused:
+
+- `openContained` opens **read-only** and refuses any other flag with
+  `write-not-permitted`. A caller cannot reintroduce the hole by forgetting to
+  pass something else.
+- It refuses any handle whose **link count is above 1**, with `hardlink`. An
+  unreported count is refused too, since optimism about what cannot be seen is
+  exactly what this module exists to avoid.
+- The refusal happens **before** a descriptor is taken, which a test asserts via
+  the `onChecked` seam rather than taking on trust.
+- Content is replaced by **renaming a new file over the directory entry**, so the
+  in-project name is repointed and any inode shared with the outside world keeps
+  its own bytes. The tests replace a hardlinked path and then assert the outside
+  file is untouched.
+
+The message deliberately does not claim the other names are outside the project.
+It cannot know that; they may all be inside. A test that hardlinks two files
+*within* the project caught an earlier version of the message asserting otherwise,
+which is the right way to find out.
+
+Hardlinks are created here with `fsutil hardlink create`, which needs no
+elevation, and the tests use real ones. A mocked link count would exercise the
+branch without touching the filesystem.
+
+### The rollback that was writing to a closed descriptor
+
+`applyAll` closes every descriptor before its commit loop, because Windows will
+not rename over an open file. Its catch block then called
+`writeFd(p.fd, p.before)` to restore what had landed.
+
+That call could not restore anything, and it was not harmless. The descriptor
+number had already been reassigned by the runtime. Verified on this machine by
+reproducing the shape: Node handed `3, 4, 5, 6` straight back to the temp files
+`atomicReplaceIfUnchanged` opens, so the "rollback" **truncated and rewrote an
+unrelated file**, left the real targets modified, and still reported
+`rolled-back`. It also settled no journal entry, so a crash afterwards would have
+found pending entries describing changes that were no longer on disk.
+
+It now calls `#undoWritten`, which restores by rename and needs no live handle,
+and settles each entry to `rolled-back`.
+
+This is the same primitive a hardlink needs -- a write through a handle to an
+inode that is not the one that was validated -- which is why it is fixed here
+rather than filed under crash recovery. `transaction.test.mjs` covers pre-flight
+refusals thoroughly and had no coverage of this path at all, which is why the bug
+survived. `writeFd` remains exported for tests only, and one of them now asserts
+that a containment handle refuses a write at the descriptor.
 
 ## Proving an edit before making it
 
@@ -1010,10 +1077,15 @@ is not there.
   The relevance filter still exists to avoid reporting the machine's own
   infrastructure, which is how a monitor gets ignored. `processAnywhere` disables
   it.
-- **Arbitrary `command` actions are still denylist-protected.** Dependency installs are
-  allowlisted, but a rule or model proposal of some other shell command passes if it
-  matches no known-bad pattern. Converting the remaining rails to an allowlist of
-  permitted commands would be the next hardening step.
+- **Arbitrary `command` actions are allowlisted.** An earlier version of this
+  bullet said they were denylist-protected, which was stale and wrong: it caused an
+  external audit to report a blocker that had already been closed. `src/act/commands.mjs`
+  checks the verb, every flag, every argument and any script a command would run,
+  against a typed allowlist, and refuses with `command_verb_not_allowed`,
+  `command_flag_not_allowed`, `command_arg_not_allowed` or
+  `command_script_not_allowed`. The regex denylist still runs, **last**, as a
+  backstop -- two layers on purpose, so the allowlist is the boundary rather than
+  the fallback. Unknown commands fail closed.
 - **PowerShell 5.1 only** here -- `pwsh` is not installed. The profile block is
   compatible with both.
 - **Rules judge one line at a time.** A multi-line stack trace is judged as N

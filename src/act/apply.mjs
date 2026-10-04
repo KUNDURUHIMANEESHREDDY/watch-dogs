@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv, installScriptsIn, NO_SCRIPTS } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
-import { containedPath, openContained, readFd, writeFd, safeClose } from './containment.mjs';
+import { containedPath, openContained, readFd, safeClose } from './containment.mjs';
 import { sha256Of, shortHash } from './hashes.mjs';
 import { atomicReplace, atomicWriteJson, atomicReplaceIfUnchanged, staleTempFiles, removeTemp } from './atomic.mjs';
 import { log } from '../core/log.mjs';
@@ -136,7 +136,7 @@ export class Applier {
     // before it. The worst consequence was not an escape but a lie in the
     // journal: the snapshot could record content that was not what got patched,
     // so a rollback would restore the wrong thing.
-    const opened = openContained(root, action.path, { flags: 'r+' });
+    const opened = openContained(root, action.path);
     if (!opened.ok) {
       const why =
         opened.why === 'missing'
@@ -405,7 +405,7 @@ applyAll(actions, ctx = {}) {
     }
 
     const root = ctx.cwd ?? this.projectRoot;
-    const opened = openContained(root, action.path, { flags: 'r+' });
+    const opened = openContained(root, action.path);
     if (!opened.ok) {
       results[i] = {
         status: 'skipped',
@@ -533,18 +533,23 @@ applyAll(actions, ctx = {}) {
       this.#settleJournal(rec.id, 'ok');
       results[p.index] = { status: 'applied', journalId: rec.id, path: relative(this.projectRoot, p.abs) };
     }  } catch (e) {
-    // Undo what landed. The preimages are in memory, so this restores exactly the
-    // bytes that were there -- no separate backup file needed.
-    const undone = [];
-    for (const p of written) {
-      try {
-        writeFd(p.fd, p.before);
-        undone.push(p.action.path);
-      } catch {
-        /* reported below; nothing more can be done for this one */
-      }
-    }
-    for (const p of prepared) safeClose(p.fd);
+    // Undo what landed -- by rename, never through the descriptor.
+    //
+    // This used to call `writeFd(p.fd, p.before)`. Every descriptor was closed at the
+    // top of this method, before the try block, so that call restored nothing: it
+    // wrote to a descriptor number the runtime had already reassigned. Verified on
+    // this machine rather than assumed -- Node handed the same numbers straight back
+    // to the temp files `atomicReplaceIfUnchanged` opens, so the "rollback"
+    // truncated and rewrote an unrelated file, left the real targets modified, and
+    // still reported `rolled-back`.
+    //
+    // It is also exactly the primitive a hardlink needs: a write through a handle to
+    // an inode that is not the one that was validated.
+    //
+    // `#undoWritten` needs no live handle, and it settles each journal entry to
+    // `rolled-back` -- which the old code did not, so a crash after this point would
+    // have found pending entries describing changes no longer on disk.
+    const undone = this.#undoWritten(written);
     for (const p of written) results[p.index] = { status: 'error', why: `write failed and was rolled back: ${e.message}` };
 
     return {
