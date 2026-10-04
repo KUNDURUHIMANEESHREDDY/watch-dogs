@@ -722,47 +722,153 @@ applyAll(actions, ctx = {}) {
    *   target matches beforeSha  nothing happened; settle it as aborted
    *   neither                   someone else changed the file; leave it and say so
    */
-  recoverPending() {
-    if (!existsSync(this.journalDir)) return { reconciled: [], removedTemp: [] };
-    const reconciled = [];
+recoverPending() {
+      if (!existsSync(this.journalDir)) return { reconciled: [], removedTemp: [], transactions: [] };
+      const reconciled = [];
 
-    for (const f of readdirSync(this.journalDir)) {
-      if (!f.endsWith('.json')) continue;
-      const p = join(this.journalDir, f);
-      let rec;
-      try {
-        rec = JSON.parse(readFileSync(p, 'utf8'));
-      } catch {
-        continue;
+      // Pending entries, grouped by the transaction that wrote them.
+      //
+      // Windows has no filesystem transaction, so a crash between two promotions
+      // leaves a genuinely torn tree, and no amount of care at write time prevents
+      // it. What is preventable is the recovery side treating the pieces as unrelated.
+      //
+      // Without a grouping, one interrupted four-file transaction and four independent
+      // edits were indistinguishable here, and the second reading is the one that
+      // quietly produces a mixed tree nobody can explain: the landed file gets
+      // settled as done, the unpromoted ones as aborted, and nothing anywhere records
+      // that these writes were meant to move together.
+      const pending = [];
+      for (const f of readdirSync(this.journalDir)) {
+        if (!f.endsWith('.json')) continue;
+        const p = join(this.journalDir, f);
+        let rec;
+        try {
+          rec = JSON.parse(readFileSync(p, 'utf8'));
+        } catch {
+          continue;
+        }
+        if (rec.outcome !== 'pending') continue;
+        pending.push({ p, rec });
       }
-      if (rec.outcome !== 'pending') continue;
 
-      const target = this.#rollbackTarget(rec);
-      if (target.error) {
-        rec.outcome = 'unresolved';
-        rec.note = target.error;
+      const groups = new Map();
+      for (const item of pending) {
+        // Entries written before transactions were identified carry no txId. They are
+        // settled one at a time, exactly as they always were.
+        const key = item.rec.txId ?? ' single:' + item.rec.id;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(item);
+      }
+
+      /** The original per-entry behaviour, for entries with no transaction to speak of. */
+      const settleOne = (p, rec) => {
+        const target = this.#rollbackTarget(rec);
+        if (target.error) {
+          rec.outcome = 'unresolved';
+          rec.note = target.error;
+          atomicWriteJson(p, rec);
+          return { id: rec.id, outcome: 'unresolved', why: target.error };
+        }
+        // The same classification rollback uses, so a crash and an operator reach the
+        // same conclusion about the same entry.
+        const outcome = this.#classify(rec, target.abs);
+        rec.outcome = outcome;
+        rec.settledAt = new Date().toISOString();
         atomicWriteJson(p, rec);
-        reconciled.push({ id: rec.id, outcome: 'unresolved', why: target.error });
-        continue;
+        return { id: rec.id, outcome, path: rec.rel ?? null };
+      };
+
+      const transactions = [];
+      for (const [key, items] of groups) {
+        const isTransaction = items.length > 1 && !key.startsWith(' single:');
+        if (!isTransaction) {
+          for (const item of items) reconciled.push(settleOne(item.p, item.rec));
+          continue;
+        }
+
+        // Classify every member before deciding anything, so the decision is taken
+        // from one consistent reading of the tree rather than while mutating it.
+        const states = items.map(({ p, rec }) => {
+          const target = this.#rollbackTarget(rec);
+          return { p, rec, target, outcome: target.error ? 'unresolved' : this.#classify(rec, target.abs) };
+        });
+
+        const landed = states.filter((s) => s.outcome === 'ok');
+        const untouched = states.filter((s) => s.outcome === 'aborted');
+        const contested = states.filter((s) => s.outcome === 'conflict' || s.outcome === 'unresolved');
+
+        // Every file landed: the crash came after the last promotion, so the
+        // transaction did what it said. Record that, rather than undoing good work.
+        const allLanded = landed.length === states.length;
+        // None landed and nothing is contested: the crash came before the first
+        // promotion. There is nothing to undo.
+        const noneLanded = landed.length === 0 && contested.length === 0;
+
+        const txOutcome = allLanded ? 'completed' : noneLanded ? 'aborted' : 'torn-rolled-back';
+
+        // The torn case. Restore what was written so the tree matches the state before
+        // the attempt, because a half-applied transaction is the one state in which a
+        // project is more confusing than either endpoint.
+        const restored = [];
+        if (txOutcome === 'torn-rolled-back') {
+          for (const s of landed) {
+            // Only where the file still holds exactly what this transaction wrote.
+            // Someone who edited it after the crash wins, as everywhere else.
+            const conflict = this.#rollbackConflict(s.rec, s.target.abs);
+            if (conflict) {
+              s.outcome = 'conflict';
+              s.rec.note = conflict;
+              continue;
+            }
+            try {
+              atomicReplace(s.target.abs, s.rec.before);
+              s.outcome = 'rolled-back';
+              restored.push(s.rec.rel ?? s.target.abs);
+            } catch (e) {
+              s.outcome = 'error';
+              s.rec.note = 'could not restore ' + s.target.abs + ': ' + e.message;
+            }
+          }
+        }
+
+        const settledAt = new Date().toISOString();
+        for (const s of states) {
+          // A landed entry in a torn transaction becomes 'rolled-back' if we put it
+          // back, and stays 'ok' only if the restore was refused because someone else
+          // had edited it -- which the conflict note above already explains.
+          if (s.outcome === 'ok') s.outcome = txOutcome === 'torn-rolled-back' ? 'rolled-back' : 'ok';
+          s.rec.outcome = s.outcome;
+          s.rec.txOutcome = txOutcome;
+          s.rec.settledAt = settledAt;
+          if (!s.rec.note) {
+            s.rec.note =
+              txOutcome === 'torn-rolled-back'
+                ? 'interrupted transaction ' + key + ': ' + landed.length + ' of ' + states.length +
+                  ' file(s) had been written. Those were restored, so the tree matches the state before the attempt.'
+                : txOutcome === 'completed'
+                  ? 'interrupted transaction ' + key + ': every file in it had been written. Recorded as done rather than undone.'
+                  : 'interrupted transaction ' + key + ': the crash came before any file was written. Nothing to undo.';
+          }
+          atomicWriteJson(s.p, s.rec);
+          reconciled.push({
+            id: s.rec.id,
+            outcome: s.rec.outcome,
+            path: s.rec.rel ?? null,
+            txId: key,
+            txOutcome,
+          });
+        }
+
+        transactions.push({
+          txId: key,
+          outcome: txOutcome,
+          files: states.length,
+          written: landed.length,
+          restored: restored.length,
+          contested: contested.length,
+          neverWritten: untouched.length,
+        });
       }
-
-      let current = null;
-      try {
-        current = readFileSync(target.abs, 'utf8');
-      } catch {
-        current = null;
-      }
-      const now = current === null ? null : sha256Of(current);
-
-      // The same classification rollback uses, so a crash and an operator reach
-      // the same conclusion about the same entry.
-      const outcome = this.#classify(rec, target.abs);
-
-      rec.outcome = outcome;
-      rec.settledAt = new Date().toISOString();
-      atomicWriteJson(p, rec);
-      reconciled.push({ id: rec.id, outcome, path: rec.rel ?? null });
-    }
 
     // Scratch files from a crash mid-write. Only ones carrying our prefix and
     // only in directories we wrote to, and only old enough that no live write is
@@ -778,7 +884,8 @@ applyAll(actions, ctx = {}) {
       if (removeTemp(abs)) removedTemp.push(abs);
     }
 
-    return { reconciled, removedTemp };
+    // transactions is what makes an interrupted multi-file edit legible as one thing.
+    return { reconciled, removedTemp, transactions };
   }
 
   #appendJournal(rec) {

@@ -438,11 +438,34 @@ Some consequences worth knowing:
   same proposal was refused, and a partial edit would leave the project in a state
   that was never verified.
 
-**What this is not:** a durable transaction. If a write fails mid-commit,
-already-written files are restored from the in-memory preimages - a best-effort
-undo, and the restore itself is reported. But a crash between two writes is still
-a torn edit, and closing *that* needs atomic file replacement rather than
-anything a method like this can do.
+**What this is not:** an atomic transaction. If a *write fails* mid-commit,
+already-written files are restored from the in-memory preimages -- a best-effort
+undo, and the restore itself is reported.
+
+A *crash* between two writes cannot be prevented: Windows offers no filesystem
+transaction, so a torn tree is a real state. What used to be missing was any way to
+**recognise** it. Every entry written by one `applyAll` now carries the id of the
+transaction that wrote it, and `recoverPending` groups by that id and decides one
+outcome for the whole transaction rather than settling each file on its own:
+
+| state after a crash | outcome | what recovery does |
+|---|---|---|
+| nothing was written | `aborted` | nothing to undo |
+| everything was written | `completed` | recorded as done -- undoing it would destroy good work |
+| some was written | `torn-rolled-back` | the written files are restored, so the tree matches the state before the attempt |
+
+That third row is the one that matters. Settling per file left the landed file as
+`ok` and the unpromoted ones as `aborted` -- not wrong file by file, but a mixed tree
+with no story attached. Restoring only what was written, and recording on every entry
+that the attempt was interrupted, makes the situation legible and puts the project
+back where it started.
+
+A restore is still refused if someone edited the file after the crash, because
+that rule applies everywhere else and an interrupted transaction is not a special
+case. Entries written before transactions had ids are settled individually, exactly
+as before.
+
+Grouping is mutation-checked: disabling it fails 4 tests.
 
 ## Verification proves a version; the file may change
 
