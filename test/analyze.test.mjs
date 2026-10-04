@@ -261,7 +261,11 @@ test('a real command is executed and journalled', async () => {
   mkdirSync(data, { recursive: true });
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'x' }));
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
-  const r = await a.applyAsync({ kind: 'command', argv: [process.execPath, '--version'] }, { cwd: root });
+  // `node --version` rather than an absolute path to node.exe. A path is refused
+  // by the command policy on purpose -- "run this exact file" is the shape that
+  // turns a vetted program name into "run whatever that file does" -- and these
+  // tests are about exec mechanics, not about smuggling code past the rails.
+  const r = await a.applyAsync({ kind: 'command', argv: ['node', '--version'] }, { cwd: root });
   assert.equal(r.status, 'applied', JSON.stringify(r));
   const entries = a.listJournal();
   assert.equal(entries.length, 1);
@@ -274,7 +278,7 @@ test('a command is never run synchronously', () => {
   mkdirSync(data, { recursive: true });
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
   // The sync entry point must refuse to block the event loop on a subprocess.
-  const r = a.apply({ kind: 'command', argv: [process.execPath, '--version'] }, { cwd: root });
+  const r = a.apply({ kind: 'command', argv: ['node', '--version'] }, { cwd: root });
   assert.equal(r.status, 'deferred');
 });
 
@@ -284,10 +288,13 @@ test('reports a command that cannot be run, rather than claiming success', async
   mkdirSync(data, { recursive: true });
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
   const r = await a.applyAsync({ kind: 'command', argv: ['definitely-not-a-real-binary-xyz'] }, { cwd: root });
-  // On Windows a missing binary surfaces as a cmd.exe non-zero exit rather than a
-  // spawn error, so accept either -- but never "applied".
+  // An unknown program is now refused before it is ever spawned, rather than being
+  // attempted and failing. The concern this test exists for -- never claim success
+  // for a command that did not run -- holds either way, but the reason changed, so
+  // assert on the refusal and check that nothing was journalled as done.
   assert.notEqual(r.status, 'applied');
-  assert.match(r.why, /exited|could not run/);
+  assert.match(r.why, /not a program the watchdog is permitted to invoke|exited|could not run/);
+  assert.equal(a.listJournal().filter((e) => e.outcome === 'ok').length, 0);
 });
 
 test('never installs into a global interpreter without a project venv', async () => {
@@ -346,13 +353,21 @@ test('a hanging command is killed instead of hanging the daemon', async () => {
   const root = tmp();
   const data = join(root, '.watchdog');
   mkdirSync(data, { recursive: true });
+  // The command is `npm run test`, a permitted shape. What the script does is the
+  // project's own business -- the watchdog asked to run the project's test
+  // command, which is exactly what it is allowed to do. Reaching for `node -e`
+  // here would have meant the guard was in the way of its own test.
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ name: 'x', scripts: { test: 'node -e "setTimeout(()=>{},60000)"' } }),
+  );
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
   const started = Date.now();
   const r = await a.applyAsync(
-    { kind: 'command', argv: [process.execPath, '-e', 'setTimeout(()=>{},60000)'], timeoutMs: 1200 },
+    { kind: 'command', argv: ['npm', 'run', 'test'], timeoutMs: 1200 },
     { cwd: root },
   );
-  assert.equal(r.status, 'error');
+  assert.equal(r.status, 'error', JSON.stringify(r));
   assert.match(r.why, /timed out/);
   assert.ok(Date.now() - started < 20_000, 'timeout did not actually fire promptly');
 });
@@ -361,14 +376,20 @@ test('fix commands are serialised rather than run concurrently', async () => {
   const root = tmp();
   const data = join(root, '.watchdog');
   mkdirSync(data, { recursive: true });
+  writeFileSync(
+    join(root, 'package.json'),
+    JSON.stringify({ name: 'x', scripts: { test: 'node -e "setTimeout(()=>{},600)"' } }),
+  );
   const a = new Applier({ projectRoot: root, dataDir: data, autonomy: 'autonomous' });
-  const cmd = { kind: 'command', argv: [process.execPath, '-e', 'setTimeout(()=>{},600)'] };
+  const cmd = { kind: 'command', argv: ['npm', 'run', 'test'] };
+  const started = Date.now();
   const results = await Promise.all([
     a.applyAsync(cmd, { cwd: root }),
     a.applyAsync(cmd, { cwd: root }),
     a.applyAsync(cmd, { cwd: root }),
   ]);
-  assert.equal(results.filter((r) => r.status === 'applied').length, 3);
-  // Three ~600ms jobs run one after another, so this must take well over 1.8s.
+  assert.equal(results.filter((r) => r.status === 'applied').length, 3, JSON.stringify(results));
+  // Three slow jobs run one after another, so this must take well over 1.8s.
+  assert.ok(Date.now() - started > 1800, 'the three jobs appear to have run concurrently');
   assert.equal(a.listJournal().length, 3);
 });

