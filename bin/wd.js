@@ -32,7 +32,7 @@ function out(...a) {
 }
 
 const HELP = `
-${col('b', 'wd')} - cross-terminal watchdog
+${col('b', 'wd')} - best-effort cross-terminal watchdog
 
 ${col('b', 'USAGE')}
   wd init [--dry-run] [--autonomous|--allowlist]

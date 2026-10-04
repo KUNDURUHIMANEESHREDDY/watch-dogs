@@ -2,7 +2,7 @@
   "name": "watchdog",
   "version": "0.1.0",
   "private": true,
-  "description": "Cross-terminal watchdog: captures every shell session (incl. IDE terminals), judges output with rules + optional LLM second opinion, and applies fixes under hard safety rails.",
+  "description": "Best-effort cross-terminal watchdog. Judges instrumented shell output with rules plus an optional LLM second opinion, applies fixes under hard safety rails, and reports what it cannot see instead of claiming coverage it does not have.",
   "type": "module",
   "bin": {
     "wd": "./bin/wd.js"

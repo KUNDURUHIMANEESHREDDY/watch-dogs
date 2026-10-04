@@ -1,8 +1,19 @@
 # watchdog
 
-Watches every terminal on the machine -- Windows Terminal, PowerShell, Git Bash, VS Code
-and Cursor integrated terminals -- spots real problems, and either suggests a fix or
-applies one under hard safety rails.
+A best-effort cross-terminal watchdog. It watches the shell sessions it can actually
+instrument -- Windows Terminal, PowerShell, Git Bash, VS Code and Cursor integrated
+terminals -- spots real problems, and either suggests a fix or applies one under hard
+safety rails.
+
+Its coverage is uneven, and deliberately so: it is strongest where it reads a shell's
+own console transcript, and honestly blind where it says so. There is no global terminal
+firehose on Windows, and it does not pretend to have one. `wd doctor` reports which
+capture layers are on, which shells are wired, and whether the daemon is alive right now;
+[Known limits](#known-limits) lists what is missing and why.
+
+One thing that report cannot tell you: a terminal opened *before* installation is not
+covered until you open a new one, because the hook runs at shell startup. `wd doctor`
+shows that the hook is installed, not that any particular window has loaded it.
 
 Zero runtime dependencies. Node 20.11+.
 

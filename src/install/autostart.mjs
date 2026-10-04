@@ -193,7 +193,19 @@ export function coverageVerdict({ registered, beatState }) {
   const alive = beatState === 'running';
 
   if (registered && alive) {
-    return { level: 'ok', headline: 'Covered: registered at logon and alive right now.', lines: [] };
+    // The one state that could be read as a blanket promise, so it is worded as
+    // what it actually is: a live daemon. Alive is not comprehensive. Only shells
+    // that load the hook are instrumented, a terminal opened before installation
+    // stays uninstrumented until it is reopened, and the ConPTY layer is off.
+    // `wd doctor` breaks the rest down per layer.
+    return {
+      level: 'ok',
+      headline: 'Daemon covered: registered at logon and alive right now.',
+      lines: [
+        'That is liveness, not full coverage: only hooked shells are instrumented,',
+        'and a terminal opened before installation is not covered until reopened.',
+      ],
+    };
   }
   if (registered && !alive) {
     return {

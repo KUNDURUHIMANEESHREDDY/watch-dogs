@@ -81,7 +81,7 @@ test('--remove is idempotent and creates nothing', () => {
 test('coverageVerdict covers all four combinations distinctly', () => {
   const covered = coverageVerdict({ registered: true, beatState: 'running' });
   assert.equal(covered.level, 'ok');
-  assert.match(covered.headline, /Covered/);
+  assert.match(covered.headline, /covered/i); // scoped to the daemon, not a blanket promise -- see the test below
 
   const registeredDead = coverageVerdict({ registered: true, beatState: 'stale' });
   assert.equal(registeredDead.level, 'bad');
@@ -98,6 +98,22 @@ test('coverageVerdict covers all four combinations distinctly', () => {
   assert.match(nothing.headline, /Nothing is watching/);
 });
 
+test('the healthy verdict does not claim coverage it does not have', () => {
+  const ok = coverageVerdict({ registered: true, beatState: 'running' });
+
+  assert.equal(ok.level, 'ok');
+
+  // "Covered" on its own reads as a promise the layers cannot keep. This is the one
+  // state where a user is most likely to stop reading, so it is the one place an
+  // unqualified claim does the most damage: the ConPTY layer is off, only shells
+  // that load the hook are instrumented, and a terminal opened before installation
+  // stays uncovered until reopened.
+  assert.match(ok.headline, /Daemon covered/i, 'the headline should say what is covered, not just "covered"');
+
+  const said = [ok.headline, ...ok.lines].join(' ');
+  assert.match(said, /not full coverage/i, 'the healthy case must state its own limit');
+  assert.match(said, /hooked shells/i, 'and say which shells actually count');
+});
 test('every coverage combination produces a non-empty message', () => {
   for (const registered of [true, false]) {
     for (const beatState of ['running', 'stale', 'dead', 'never-started']) {
