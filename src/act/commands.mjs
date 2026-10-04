@@ -37,6 +37,9 @@ const EVAL_FLAGS = new Set([
   '--exec', '-X', 'eval', 'exec', 'source', '.',
 ]);
 
+/** Flags that forbid a tool from fetching anything. npx enforces these itself. */
+const NO_DOWNLOAD_FLAGS = new Set(['--no-install', '--no', '--offline', '--prefer-offline']);
+
 /** Characters that have no business in an argument the watchdog constructed. */
 const METACHARS = /[|;&><`$(){}\[\]!*?\n\r\\]/;
 
@@ -78,6 +81,7 @@ export const CMD_REFUSAL = Object.freeze({
   SCRIPT_NOT_ALLOWED: 'command_script_not_allowed',
   TOO_MANY_ARGS: 'command_too_many_args',
   NO_VERB: 'command_no_verb',
+  MAY_DOWNLOAD: 'command_may_download',
   EMPTY: 'command_empty',
 });
 
@@ -156,10 +160,25 @@ export const COMMAND_POLICY = Object.freeze({
   tsc: { verbs: { '--noEmit': { flags: [], positionals: 'paths' } } },
   eslint: { verbs: {} },
   npx: {
+    // Bare `npx <name>` is NOT permitted, and the reason is worth being exact
+    // about: npx does not only run a locally installed binary, it *fetches* one.
+    // `npx tsc` against a project without typescript resolves the `tsc` package
+    // from the registry, installs it, and runs its bin script -- so a line of
+    // terminal output could choose a package name and get code execution, which
+    // is the same supply-chain hole the install policy spends so much effort
+    // closing.
+    //
+    // The previous comment here claimed these were "binaries the project already
+    // declares". Nothing checked that, and npx would not have honoured it.
+    //
+    // `--no-install` (or its `--no` alias) is required, and npx enforces it
+    // itself: the binary must already be present locally or the command fails.
+    // Relying on npx's own enforcement is better than duplicating a filesystem
+    // check here -- this function is deliberately pure, and a hand-rolled
+    // "is it declared" test would be a weaker copy of a guarantee npm already
+    // provides.
+    requiresLocalBinary: true,
     verbs: {
-      // Not `npx <anything>`: npx resolves and runs an arbitrary package. Only the
-      // binaries the project already declares are permitted, and the shape check
-      // still applies to what follows.
       tsc: { flags: ['--noEmit'], positionals: 'paths' },
       eslint: { flags: [], positionals: 'paths' },
     },
@@ -245,6 +264,19 @@ export function checkCommand(argv) {
   const verbIndex = flagLikeVerb ? 0 : rest.findIndex((a) => !a.startsWith('-'));
   const found = verbIndex < 0 ? rest[0] : rest[verbIndex];
 
+  // npx will download a package to satisfy a bare binary name, so it may only be
+  // used in a form that cannot. Checked here, before any verb is chosen, because
+  // the verb is the thing that gets fetched.
+  if (policy.requiresLocalBinary && !rest.some((a) => NO_DOWNLOAD_FLAGS.has(a))) {
+    return {
+      ok: false,
+      code: CMD_REFUSAL.MAY_DOWNLOAD,
+      why:
+        `refuses "npx ${rest.find((a) => !a.startsWith('-')) ?? '?'}": npx downloads the package when the binary is not installed ` +
+        'locally, so a bare invocation lets terminal output choose what gets fetched and executed. ' +
+        'Use --no-install, or run the binary directly.',
+    };
+  }
   // A program whose invocation is verb-less: `pytest -q` is the whole command, so
   // without this the first flag is taken as the verb and refused as unknown. Only
   // applied when the token found was flag-shaped or absent -- `npm deploy` must
@@ -274,6 +306,11 @@ export function checkCommand(argv) {
   // install` walks straight past the verb check.
   for (const f of before) {
     const name = f.includes('=') ? f.slice(0, f.indexOf('=')) : f;
+    // The no-download flags sit before the verb by convention, as in
+    // npx --no-install tsc, so they must be permitted there even though no verb
+    // declares them: they are what makes the invocation safe, not an extra
+    // argument to the verb.
+    if (policy.requiresLocalBinary && NO_DOWNLOAD_FLAGS.has(name)) continue;
     if (!verbPolicy.flags.includes(name)) {
       return {
         ok: false,

@@ -55,7 +55,7 @@ test('ordinary project work is permitted', () => {
     ['pytest', '-q'],
     ['go', 'test', './...'],
     ['node', '--version'],
-    ['npx', 'tsc', '--noEmit'],
+    ['npx', '--no-install', 'tsc', '--noEmit'],
   ]) {
     const r = checkCommand(argv);
     assert.equal(r.ok, true, `expected ${argv.join(' ')} to be allowed: ${r.why ?? ''}`);
@@ -139,6 +139,58 @@ test('an eval flag is refused even on an otherwise-allowed program', () => {
   const r = checkCommand(['node', '--version', '-e', 'x']);
   assert.equal(r.ok, false);
   assert.ok([REFUSAL.COMMAND_EVAL, REFUSAL.COMMAND_FLAG_NOT_ALLOWED].includes(r.code), r.code);
+});
+
+/* ------------------------------------------------------------------ *
+ * npx, which fetches rather than merely runs
+ * ------------------------------------------------------------------ */
+
+test('bare npx is refused because npx will download the binary', () => {
+  // The hole: `npx <name>` does not only run a locally installed binary, it
+  // *fetches* one. Against a project without typescript it resolves the `tsc`
+  // package from the registry, installs it and runs its bin script -- so a line of
+  // terminal output could choose a package name and get code execution, which is
+  // the supply-chain hole the install policy spends so much effort closing.
+  const r = checkCommand(['npx', 'tsc', '--noEmit']);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, REFUSAL.COMMAND_MAY_DOWNLOAD);
+  assert.match(r.why, /downloads the package/i);
+  assert.match(r.why, /--no-install/, 'the refusal does not say what to use instead');
+});
+
+test('npx is permitted only in a form that cannot download', () => {
+  for (const argv of [
+    ['npx', '--no-install', 'tsc', '--noEmit'],
+    ['npx', '--no', 'tsc'],
+    ['npx', '--offline', 'eslint'],
+  ]) {
+    const r = checkCommand(argv);
+    assert.equal(r.ok, true, `${argv.join(' ')} was refused: ${r.why ?? ''}`);
+  }
+});
+
+test('the no-download flag does not widen what npx may run', () => {
+  // `--no-install` makes the *fetch* impossible; it does not make an arbitrary
+  // binary name safe. Both halves still apply.
+  const r = checkCommand(['npx', '--no-install', 'evil-package']);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, REFUSAL.COMMAND_VERB_NOT_ALLOWED);
+});
+
+test('running the binary directly needs no such flag', () => {
+  // The practical cost of the rule is nil: the binary is already allowed on its
+  // own, and npm scripts put node_modules/.bin on PATH.
+  assert.equal(checkCommand(['tsc', '--noEmit']).ok, true);
+});
+
+test('every program that can fetch declares that it must be told not to', () => {
+  // A future entry added to the policy could fetch without inheriting the
+  // requirement, and the check would only apply where it was remembered.
+  for (const [name, spec] of Object.entries(COMMAND_POLICY)) {
+    if (/^(npx|pnpx|bunx|dlx|uvx|pipx)$/i.test(name)) {
+      assert.equal(spec.requiresLocalBinary, true, `${name} can fetch but does not declare the requirement`);
+    }
+  }
 });
 
 /* ------------------------------------------------------------------ *

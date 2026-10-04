@@ -439,6 +439,45 @@ file, so it was not applied. Re-run the check against the current file.
 Rule-driven fixes pass no `expectPreimage` and are unaffected - they're reviewed
 by the rule's author and never go through staged verification.
 
+## npx fetches; it does not only run
+
+The command policy permits `npx tsc` and `npx eslint`, and the comment claimed
+these were "binaries the project already declares". Nothing checked that, and
+npx would not have honoured it either.
+
+`npx <name>` does not only run a locally installed binary - it **fetches** one.
+Against a project without typescript it resolves the `tsc` package from the
+registry, installs it, and runs its bin script. So a line of terminal output
+could choose a package name and get code execution, which is exactly the
+supply-chain hole the install policy spends so much effort closing, reachable
+through a command the policy had already blessed.
+
+Bare `npx` is now refused:
+
+```
+refuses "npx tsc": npx downloads the package when the binary is not installed
+locally, so a bare invocation lets terminal output choose what gets fetched and
+executed. Use --no-install, or run the binary directly.
+```
+
+`--no-install` (or `--no`, `--offline`) is required, and **npx enforces it
+itself** - the binary must already be present locally or the command fails.
+Relying on the tool's own enforcement beats duplicating a filesystem check here:
+`checkCommand` is deliberately pure, and a hand-rolled "is it declared" test
+would be a weaker copy of a guarantee npm already provides.
+
+The flag does not widen anything: `npx --no-install evil-package` is still
+refused, because `--no-install` makes the *fetch* impossible but says nothing
+about whether a binary name is safe.
+
+The practical cost is nil. `tsc` and `eslint` are allowed directly, and npm
+scripts already put `node_modules/.bin` on PATH, so the direct form is what a
+project would use anyway.
+
+The requirement is declared on the program (`requiresLocalBinary`) rather than
+special-cased, and a test asserts that every program which can fetch declares it
+- so a future `bunx` or `uvx` added to the policy cannot forget.
+
 ## Dependency repair does not hand a package your credentials
 
 Repair already decided *which* package to install: it must be declared, the
