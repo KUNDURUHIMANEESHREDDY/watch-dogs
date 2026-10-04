@@ -586,6 +586,10 @@ applyAll(actions, ctx = {}) {
   // re-read and compared against the validated preimage immediately before the
   // swap: a concurrent edit becomes a refusal rather than a silent overwrite.
   const written = [];
+  // One id for the whole transaction, stamped onto every entry it writes, so
+  // that recovery can tell an interrupted multi-file transaction from a set of
+  // unrelated single-file edits.
+  const txId = `tx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   for (const p of prepared) safeClose(p.fd);
   try {
     for (const p of prepared) {
@@ -610,6 +614,7 @@ applyAll(actions, ctx = {}) {
       const rec = this.#appendJournal({
         type: 'patch', abs: p.abs, before: p.before, after: p.after,
         beforeSha: sha256Of(p.before), afterSha: sha256Of(p.after),
+        txId,
         ctx, action: p.action, outcome: 'pending',
       });
       p.journalId = rec.id;
