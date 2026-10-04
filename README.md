@@ -275,6 +275,40 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Failing safe when configuration is broken
+
+A config file that cannot be read is a config whose intent is unknown, and the
+safe reading of unknown is the least permissive one:
+
+```
+{"autonomy": "suggest"}
+  truncated by a half-written file
+  defaults say "autonomous"
+  watchdog applies fixes without asking
+```
+
+That used to be exactly what happened. An unreadable layer was replaced with
+`{}` and the defaults filled the gap, so a parse failure **increased**
+permission. It now pins autonomy to `suggest` and says so in `wd status` and
+`wd doctor`, because a silent downgrade is its own lie - the obvious reading of
+`autonomy  suggest` is "I chose that".
+
+One deliberate exception: if a **readable** layer states autonomy explicitly, it
+is honoured. The hazard is a default being used as a substitute for a decision,
+not a stray broken file. A corrupt `~/.watchdog/config.json` is reported but
+does not veto a project's deliberate `autonomous`; letting the fail-safe decide
+policy would be worse than the bug.
+
+The rest of the config still loads. A watchdog that refuses to start is not a
+safe watchdog, it is a blind one, and losing monitoring quietly is its own
+failure mode.
+
+> A related bug this uncovered: `DEFAULTS` was `Object.freeze`d, which looks
+> immutable but is only one level deep. The merge shared `DEFAULTS.paths` by
+> reference, so assigning `merged.paths.data` wrote straight through into the
+> default and the *next* project loaded inherited the *previous* project's data
+> directory. Merges are now deep-copied.
+
 ## What the model is actually good at
 
 The sandbox asserts a proposed edit is "applied or safely refused", which passes

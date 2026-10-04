@@ -20,8 +20,30 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Applier } from '../src/act/apply.mjs';
+import { loadConfig, DEFAULTS, deepMerge } from '../src/core/config.mjs';
 
-const project = () => mkdtempSync(join(tmpdir(), 'wd-rollback-'));
+/** Project with a package.json so findProjectRoot terminates. */
+const project = () => {
+  const root = mkdtempSync(join(tmpdir(), 'wd-rollback-'));
+  writeFileSync(join(root, 'package.json'), '{"name":"rb"}\n', 'utf8');
+  return root;
+};
+
+/** The global layer holds live credentials; these tests must not read it. */
+function withIsolatedHome(fn) {
+  const orig = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+  const home = mkdtempSync(join(tmpdir(), 'wd-home-'));
+  process.env.USERPROFILE = home;
+  process.env.HOME = home;
+  try {
+    return fn(home);
+  } finally {
+    for (const [k, v] of Object.entries(orig)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
 
 function setup() {
   const root = project();
@@ -48,6 +70,67 @@ function readEntry(root, id) {
 function writeEntry(root, id, rec) {
   writeFileSync(join(journalDir(root), `${id}.json`), JSON.stringify(rec), 'utf8');
 }
+
+/**
+ * Prove a refusal was caused by the validation and not by a missing file.
+ *
+ * A test that asserts `status === 'refused'` passes for the wrong reason if the
+ * target never existed, so each hostile case re-runs the same rollback after
+ * repairing the entry and requires it to actually roll back.
+ */
+function assertRefusalIsReal(a, root, id, repair) {
+  const refused = a.rollback(id);
+  assert.equal(refused.status, 'refused', `expected a refusal, got ${JSON.stringify(refused)}`);
+
+  const rec = JSON.parse(readFileSync(join(journalDir(root), `${id}.json`), 'utf8'));
+  assert.equal(rec.outcome, 'ok', 'the entry was mutated despite being refused');
+  writeEntry(root, id, repair(rec));
+  const repaired = a.rollback(id);
+  assert.equal(repaired.status, 'rolled-back', `the refusal was not caused by the tampering: ${JSON.stringify(repaired)}`);
+}
+
+test('loading one project does not change what the next project gets', () => {
+  // DEFAULTS is frozen, which looks immutable but is only one level deep. The
+  // merge used to share DEFAULTS.paths by reference, so `merged.paths.data = ...`
+  // wrote through into the default and the second project inherited the first
+  // project's data directory.
+  withIsolatedHome(() => {
+    const a = project();
+    const b = project();
+    const first = loadConfig({ cwd: a, projectRoot: a });
+    const second = loadConfig({ cwd: b, projectRoot: b });
+
+    assert.equal(first.paths.data, join(a, '.watchdog'));
+    assert.equal(second.paths.data, join(b, '.watchdog'), 'the second project inherited the first data dir');
+    assert.notEqual(DEFAULTS.paths.data, join(a, '.watchdog'), 'DEFAULTS was mutated');
+  });
+});
+
+test('a merged config does not alias the defaults', () => {
+  withIsolatedHome(() => {
+    const root = project();
+    const cfg = loadConfig({ cwd: root, projectRoot: root });
+
+    cfg.analyze.llm.enabled = false;
+    cfg.analyze.llm.cli = 'tampered';
+    cfg.ignore.push('**/secret/**');
+
+    assert.equal(DEFAULTS.analyze.llm.enabled, true, 'a nested default was mutated through the result');
+    assert.equal(DEFAULTS.analyze.llm.cli, 'opencode');
+    assert.ok(!DEFAULTS.ignore.includes('**/secret/**'), 'the default ignore list was mutated');
+  });
+});
+
+test('two deepMerge results never share a nested object', () => {
+  const base = { a: { b: { c: 1 } }, list: [1, 2] };
+  const one = deepMerge(base, {});
+  const two = deepMerge(base, {});
+  one.a.b.c = 99;
+  one.list.push(3);
+  assert.equal(two.a.b.c, 1, 'nested objects are shared between results');
+  assert.deepEqual(base.list, [1, 2], 'an array was shared with the base');
+  assert.equal(base.a.b.c, 1, 'the base was mutated');
+});
 
 test('the journal records a project-relative path', () => {
   const { root, a } = setup();
@@ -78,8 +161,7 @@ test('a journal entry pointing outside the project is refused', () => {
   // The attack: keep `rel` innocuous-looking but make abs the real target.
   writeEntry(root, r.journalId, { ...rec, abs: outside, before: 'OVERWRITTEN' });
 
-  const back = a.rollback(r.journalId);
-  assert.equal(back.status, 'refused', JSON.stringify(back));
+  assertRefusalIsReal(a, root, r.journalId, (r2) => ({ ...r2, abs: join(root, 'src', 'a.js'), before: 'ORIGINAL\n' }));
   assert.equal(readFileSync(outside, 'utf8'), 'SECRET', 'the file outside the project was overwritten');
 });
 
@@ -119,6 +201,11 @@ test('an entry with no relative path is refused rather than guessed at', () => {
   const back = a.rollback(r.journalId);
   assert.equal(back.status, 'refused', JSON.stringify(back));
   assert.match(back.why, /relative path/);
+
+  // Repairing the entry must make it work, proving the refusal was about the
+  // missing relative path and not about anything incidental.
+  writeEntry(root, r.journalId, { ...readEntry(root, r.journalId), rel: 'src/a.js' });
+  assert.equal(a.rollback(r.journalId).status, 'rolled-back');
 });
 
 test('a journal aimed at a credential file is refused', () => {
@@ -161,6 +248,9 @@ test('a mismatch between abs and rel is treated as tampering', () => {
   const back = a.rollback(r.journalId);
   assert.equal(back.status, 'refused', JSON.stringify(back));
   assert.match(back.why, /does not match/);
+
+  writeEntry(root, r.journalId, { ...readEntry(root, r.journalId), abs: join(root, 'src', 'a.js') });
+  assert.equal(a.rollback(r.journalId).status, 'rolled-back');
 });
 
 test('the journal directory is not itself a way out', () => {

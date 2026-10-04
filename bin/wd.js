@@ -329,12 +329,36 @@ function printAutostartStatus(status, beat) {
   out(col(tone, '  ' + v.headline));
   for (const l of v.lines) out(col('d', '    ' + l));
 }
+/**
+ * Say out loud when autonomy is not what the config asked for.
+ *
+ * A config file that cannot be parsed pins autonomy to `suggest`. That downgrade
+ * is the safe direction, but a silent one is a lie the user has to notice
+ * themselves -- the obvious reading of `autonomy  suggest` is "I chose that",
+ * when in fact the choice was taken away from them by a broken file. So the
+ * reason travels with the config and every status view prints it.
+ */
+function reportUnreadableConfig(cfg, indent = '') {
+  const bad = cfg.safety?.configUnreadable;
+  if (!bad?.length) return;
+  out(
+    indent +
+      col('y', 'config could not be read, so autonomy was pinned to "suggest" rather than assumed') +
+      col('d', '  (a broken config must never grant more permission)'),
+  );
+  for (const b of bad) {
+    out(indent + col('y', `  ${b.layer}: ${b.path}`));
+    out(indent + col('d', `    ${b.why}`));
+  }
+}
+
 async function cmdDoctor(flags) {
   const cfg = loadConfig();
   out(col('b', 'watchdog doctor\n'));
   out(`project root   ${cfg.projectRoot}`);
   out(`data dir       ${cfg.paths.data}${existsSync(cfg.paths.data) ? '' : col('y', '  (not created yet)')}`);
   out(`autonomy       ${cfg.autonomy}${cfg.autonomy === 'autonomous' ? col('y', '  <- applies fixes without asking') : ''}`);
+  reportUnreadableConfig(cfg);
   out(`llm advisor    ${cfg.analyze.llm.enabled ? cfg.analyze.llm.cli : 'disabled'}${cfg.analyze.llm.model ? ` (${cfg.analyze.llm.model})` : ''}`);
   out('');
 
@@ -429,6 +453,7 @@ function cmdStatus() {
     ? cfg.analyze.llm.cli + (cfg.analyze.llm.model ? ' ' + cfg.analyze.llm.model : '')
     : 'disabled';
   out('  ' + col('b', 'autonomy'.padEnd(15)) + ' ' + cfg.autonomy + (cfg.autonomy === 'autonomous' ? col('y', '  (applies fixes without asking)') : ''));
+  reportUnreadableConfig(cfg, '    ');
   out('  ' + col('b', 'llm advisor'.padEnd(15)) + ' ' + llm);
   out('  ' + col('b', 'daemon'.padEnd(15)) + ' ' + beat.detail);
 
