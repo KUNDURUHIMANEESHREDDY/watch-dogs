@@ -29,6 +29,7 @@ import { mkdtempSync, mkdirSync, readdirSync, copyFileSync, statSync, existsSync
 import { tmpdir } from 'node:os';
 import { join, relative, dirname, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
+import { sha256Of } from './hashes.mjs';
 
 /** Never copied. .git is history, node_modules is large and reinstallable. */
 const NOT_STAGED = new Set(['.git', 'node_modules', '.watchdog']);
@@ -128,6 +129,7 @@ function copyFileTree(src, dst) {
 export function applyToStage(stage, files) {
   const applied = [];
   const failed = [];
+  const preimages = [];
 
   for (const f of files ?? []) {
     const abs = join(stage, f.path);
@@ -142,6 +144,12 @@ export function applyToStage(stage, files) {
       failed.push({ path: f.path, why: e.message });
       continue;
     }
+
+    // The preimage of the version about to be verified. The stage is a faithful
+    // copy, so this is also the real file's content at the moment of copying --
+    // which is what makes it worth comparing against later.
+    preimages.push({ path: f.path, sha256: sha256Of(body) });
+
     const at = body.indexOf(f.find);
     if (at < 0) {
       failed.push({ path: f.path, why: 'the text to replace is not present in the staged copy' });
@@ -155,7 +163,7 @@ export function applyToStage(stage, files) {
     writeFileSync(abs, after, 'utf8');
     applied.push(f);
   }
-  return { applied, failed };
+  return { applied, failed, preimages };
 }
 
 /**
@@ -246,6 +254,7 @@ export async function verifyProposals({ projectRoot, files, verifyCfg }) {
   }
 
   let stage;
+  let preimages = [];
   try {
     stage = stageProject(projectRoot);
   } catch (e) {
@@ -253,7 +262,8 @@ export async function verifyProposals({ projectRoot, files, verifyCfg }) {
   }
 
   try {
-    const { applied, failed } = applyToStage(stage, files);
+    const { applied, failed, preimages: pre } = applyToStage(stage, files);
+    preimages = pre;
     if (failed.length) {
       return {
         verdict: 'unverified',
@@ -290,7 +300,11 @@ export async function verifyProposals({ projectRoot, files, verifyCfg }) {
         output: result.output,
       };
     }
-    return { verdict: 'pass', why: 'the project passes its own verification with this edit applied' };
+    return {
+      verdict: 'pass',
+      why: 'the project passes its own verification with this edit applied',
+      preimages,
+    };
   } finally {
     try {
       rmSync(stage, { recursive: true, force: true, maxRetries: 3 });

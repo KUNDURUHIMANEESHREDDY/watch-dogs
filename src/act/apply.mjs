@@ -14,6 +14,7 @@ import { makeRunnable, runCapture } from '../core/exec.mjs';
 import { isDeclared, lockfileKind, repairArgv, installScriptsIn, NO_SCRIPTS } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
 import { containedPath, openContained, readFd, writeFd, safeClose } from './containment.mjs';
+import { sha256Of, shortHash } from './hashes.mjs';
 import { log } from '../core/log.mjs';
 
 export class Applier {
@@ -152,6 +153,32 @@ export class Applier {
     } catch (e) {
       safeClose(opened.fd);
       return { status: 'skipped', why: `could not read ${action.path}: ${e.message}` };
+    }
+
+    // Optimistic concurrency control.
+    //
+    // Verification proved a particular *version* of this file was fine. This is
+    // the last moment the bytes being written are known, so this is where the
+    // version that was checked is compared against the version being changed.
+    //
+    // The check is here rather than in the caller on purpose: a precondition that
+    // a caller can forget is not a precondition, and every write funnels through
+    // this method. The comparison is against the content read through the
+    // validated descriptor -- hashing the path instead would reintroduce the
+    // "the object at this path may have changed" problem.
+    if (action.expectPreimage) {
+      const actual = sha256Of(before);
+      if (actual !== action.expectPreimage) {
+        safeClose(opened.fd);
+        return {
+          status: 'stale',
+          why:
+            `${action.path} changed after it was verified (expected ${shortHash(action.expectPreimage)}, ` +
+            `found ${shortHash(actual)}). The fix was proved against a different version of this file, ` +
+            'so it was not applied. Re-run the check against the current file.',
+          code: 'stale_preimage',
+        };
+      }
     }
 
     const idx = before.indexOf(action.find);

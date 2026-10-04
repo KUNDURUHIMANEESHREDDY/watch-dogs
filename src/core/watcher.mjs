@@ -385,6 +385,10 @@ export class Watcher extends EventEmitter {
     }
 
     const results = [];
+    // The preimage each file had when it was verified, so the write can refuse if
+    // the file is no longer that version.
+    const preimages = new Map((verdict.preimages ?? []).map((p) => [p.path, p.sha256]));
+
     for (const file of canonical) {
       results.push(
         // `cwd: this.projectRoot`, not `rec.cwd`. The path is project-root-relative
@@ -394,7 +398,16 @@ export class Watcher extends EventEmitter {
         // a package manifest here, because the existing rails only ask whether
         // the path is forbidden.
         this.#applier.apply(
-          { kind: 'patch-file', path: file.path, find: file.find, replace: file.replace },
+          {
+            kind: 'patch-file',
+            path: file.path,
+            find: file.find,
+            replace: file.replace,
+            // Enforced inside the applier, not trusted from here. If the file
+            // changed between the check and this write, the result is `stale` and
+            // nothing is written.
+            expectPreimage: preimages.get(file.path),
+          },
           { cwd: this.projectRoot, source: 'llm' },
         ),
       );
