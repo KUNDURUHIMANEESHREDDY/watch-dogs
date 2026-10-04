@@ -15,6 +15,7 @@ import { isDeclared, lockfileKind, repairArgv, installScriptsIn, NO_SCRIPTS } fr
 import { isRefused, describeRefusal } from './guard.mjs';
 import { containedPath, openContained, readFd, writeFd, safeClose } from './containment.mjs';
 import { sha256Of, shortHash } from './hashes.mjs';
+import { atomicReplace, atomicWriteJson, atomicReplaceIfUnchanged, staleTempFiles, removeTemp } from './atomic.mjs';
 import { log } from '../core/log.mjs';
 
 export class Applier {
@@ -212,14 +213,33 @@ export class Applier {
     this.#pendingSnapshots.set(abs, Buffer.from(before, 'utf8'));
 
     try {
-      writeFd(opened.fd, after);
+      // Replaced atomically and recorded before promotion, the same ordering
+      // the transaction uses. The descriptor is closed first because Windows will
+      // not rename over an open file; atomicReplaceIfUnchanged then re-reads and
+      // compares against the preimage, closing the window that creates.
+      safeClose(opened.fd);
+      const swap = atomicReplaceIfUnchanged(abs, after, sha256Of(before));
+      if (!swap.ok) {
+        return { status: 'stale', code: 'stale_preimage', why: action.path + ': ' + swap.why };
+      }
     } catch (e) {
       safeClose(opened.fd);
       return { status: 'error', why: `could not write ${action.path}: ${e.message}` };
     }
     safeClose(opened.fd);
 
-    return this.#journal({ type: 'patch', abs, before, after, ctx, action });
+    // Both hashes recorded even on this path, so every settled entry -- single or
+    // transactional -- is reconcilable after a crash.
+    return this.#journal({
+      type: 'patch',
+      abs,
+      before,
+      after,
+      beforeSha: sha256Of(before),
+      afterSha: sha256Of(after),
+      ctx,
+      action,
+    });
   }
 
   #writeFile(action, ctx) {
@@ -466,16 +486,53 @@ applyAll(actions, ctx = {}) {
     return { status: counts.status, results, written: 0 };
   }
 
-  // ---- phase 2: commit. Everything was validated.
+  // ---- phase 2: commit.
+  //
+  // Each file is replaced atomically and recorded before it is promoted, so a
+  // crash at any point leaves either the old file or a recoverable marker:
+  //
+  //   crash before the rename   target untouched, entry says 'pending'
+  //   crash after the rename    entry says 'pending' and the target holds the
+  //                             new content, so recovery can tell which happened
+  //   crash after the settle    entry says 'ok', as normal
+  //
+  // The descriptor is closed before the rename because Windows will not rename
+  // over an open file. That reopens a small window, which is why the target is
+  // re-read and compared against the validated preimage immediately before the
+  // swap: a concurrent edit becomes a refusal rather than a silent overwrite.
   const written = [];
+  for (const p of prepared) safeClose(p.fd);
   try {
     for (const p of prepared) {
-      writeFd(p.fd, p.after);
-      this.#pendingSnapshots.set(p.abs, Buffer.from(p.before, 'utf8'));
-      results[p.index] = this.#journal({ type: 'patch', abs: p.abs, before: p.before, after: p.after, ctx, action: p.action });
+      const swap = atomicReplaceIfUnchanged(p.abs, p.after, sha256Of(p.before));
+      if (!swap.ok) {
+        const undone = this.#undoWritten(written);
+        for (const q of prepared) {
+          results[q.index] =
+            q.index === p.index
+              ? { status: 'stale', code: 'stale_preimage', why: `${p.action.path} changed before it could be written: ${swap.why}` }
+              : { status: 'skipped', why: 'not applied: the transaction stopped before this file.' };
+        }
+        return {
+          status: undone.length ? 'rolled-back' : 'none_applied',
+          results,
+          written: 0,
+          detail: undone.length ? `restored ${undone.length} file(s): ${undone.join(', ')}` : 'nothing had been written',
+        };
+      }
+
+      // The intent record, durable and atomic, written *before* the promotion.
+      const rec = this.#appendJournal({
+        type: 'patch', abs: p.abs, before: p.before, after: p.after,
+        beforeSha: sha256Of(p.before), afterSha: sha256Of(p.after),
+        ctx, action: p.action, outcome: 'pending',
+      });
+      p.journalId = rec.id;
       written.push(p);
-    }
-  } catch (e) {
+      this.#pendingSnapshots.set(p.abs, Buffer.from(p.before, 'utf8'));
+      this.#settleJournal(rec.id, 'ok');
+      results[p.index] = { status: 'applied', journalId: rec.id, path: relative(this.projectRoot, p.abs) };
+    }  } catch (e) {
     // Undo what landed. The preimages are in memory, so this restores exactly the
     // bytes that were there -- no separate backup file needed.
     const undone = [];
@@ -507,10 +564,127 @@ applyAll(actions, ctx = {}) {
 
 
 
-  #journal({ type, abs, before, after, ctx, action }) {
+  #journal(recIn) {
+    const { type, abs, before, after, ctx, action } = recIn;
     this.#pendingSnapshots.delete(abs);
-    const rec = this.#appendJournal({ type, abs, before, after, ctx, action, outcome: 'ok' });
+    // Written as 'pending' and then settled, even on the single-file path: the entry
+    // is durable before the caller is told the change succeeded.
+    const rec = this.#appendJournal({ ...recIn, outcome: 'pending' });
+    this.#settleJournal(rec.id, 'ok');
     return { status: 'applied', journalId: rec.id, path: abs ? relative(this.projectRoot, abs) : null };
+  }
+
+  /**
+   * Restore files already written in a transaction that then failed.
+   *
+   * The preimages are in memory, so this restores exactly the bytes that were
+   * there. Each restore is itself atomic, so a failure part-way through does not
+   * leave a half-restored file.
+   */
+  #undoWritten(written) {
+    const undone = [];
+    for (const p of written) {
+      try {
+        atomicReplace(p.abs, p.before);
+        undone.push(p.action.path);
+        this.#settleJournal(this.#journalIdFor(p), 'rolled-back');
+      } catch {
+        /* reported by the caller's summary rather than swallowed */
+      }
+    }
+    return undone;
+  }
+
+  /** Journal id recorded for a prepared entry, once it has been written. */
+  #journalIdFor(p) {
+    return p.journalId;
+  }
+
+  /** Move a journalled record from 'pending' to a settled outcome. */
+  #settleJournal(id, outcome) {
+    const p = join(this.journalDir, `${id}.json`);
+    if (!existsSync(p)) return null;
+    let rec;
+    try {
+      rec = JSON.parse(readFileSync(p, 'utf8'));
+    } catch {
+      return null;
+    }
+    rec.outcome = outcome;
+    rec.settledAt = new Date().toISOString();
+    atomicWriteJson(p, rec);
+    return rec;
+  }
+
+  /**
+   * Reconcile journal entries left 'pending' by a crash.
+   *
+   * An entry is written before its file is promoted, so 'pending' covers both
+   * "the crash happened first" and "the promotion happened first". The hashes
+   * recorded with it tell the two apart:
+   *
+   *   target matches afterSha   the promotion happened; settle it as ok
+   *   target matches beforeSha  nothing happened; settle it as aborted
+   *   neither                   someone else changed the file; leave it and say so
+   */
+  recoverPending() {
+    if (!existsSync(this.journalDir)) return { reconciled: [], removedTemp: [] };
+    const reconciled = [];
+
+    for (const f of readdirSync(this.journalDir)) {
+      if (!f.endsWith('.json')) continue;
+      const p = join(this.journalDir, f);
+      let rec;
+      try {
+        rec = JSON.parse(readFileSync(p, 'utf8'));
+      } catch {
+        continue;
+      }
+      if (rec.outcome !== 'pending') continue;
+
+      const target = this.#rollbackTarget(rec);
+      if (target.error) {
+        rec.outcome = 'unresolved';
+        rec.note = target.error;
+        atomicWriteJson(p, rec);
+        reconciled.push({ id: rec.id, outcome: 'unresolved', why: target.error });
+        continue;
+      }
+
+      let current = null;
+      try {
+        current = readFileSync(target.abs, 'utf8');
+      } catch {
+        current = null;
+      }
+      const now = current === null ? null : sha256Of(current);
+
+      let outcome;
+      if (rec.afterSha && now === rec.afterSha) outcome = 'ok';
+      else if (rec.beforeSha && now === rec.beforeSha) outcome = 'aborted';
+      else outcome = 'conflict';
+
+      rec.outcome = outcome;
+      rec.settledAt = new Date().toISOString();
+      atomicWriteJson(p, rec);
+      reconciled.push({ id: rec.id, outcome, path: rec.rel ?? null });
+    }
+
+    // Scratch files from a crash mid-write. Only ones carrying our prefix and
+    // only in directories we wrote to, and only old enough that no live write is
+    // still holding one.
+    const dirs = new Set();
+    for (const r of reconciled) {
+      if (!r.path) continue;
+      const t = this.#rollbackTarget({ rel: r.path });
+      if (!t.error) dirs.add(dirname(t.abs));
+    }
+    const removedTemp = [];
+    for (const abs of staleTempFiles([...dirs], { olderThanMs: 0 })) {
+      if (removeTemp(abs)) removedTemp.push(abs);
+    }
+
+    return { reconciled, removedTemp };
   }
 
   #appendJournal(rec) {

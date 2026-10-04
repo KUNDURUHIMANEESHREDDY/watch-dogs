@@ -275,6 +275,46 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## A crash cannot leave a file half-written, or a change unrecorded
+
+Writing was `truncate` then `write`. That has two bad windows:
+
+```
+truncate, crash mid-write   ->  the file is corrupt, and no record of what it held
+write, crash before the
+journal entry exists         ->  the change happened and nothing mentions it
+```
+
+The target is now **never modified in place**. Contents go to a scratch file in
+the same directory, get flushed, and are renamed over the target. A rename within
+one filesystem is atomic, so an observer sees the old file or the new one and
+never a mixture. The scratch file has to be a *sibling* rather than in the system
+temp directory, because a cross-filesystem rename is a copy, which would
+reintroduce exactly the window this closes.
+
+The journal entry is written **before** the promotion, with `outcome: "pending"`
+and a hash of both images. That makes each crash window decidable rather than
+ambiguous:
+
+| target matches | means | settled as |
+|---|---|---|
+| `afterSha` | the rename happened | `ok` |
+| `beforeSha` | nothing happened | `aborted` |
+| neither | someone else changed it | `conflict`, left alone |
+
+`recoverPending()` walks those entries and applies that table, then clears scratch
+files left by a crash mid-write. The third row is the one worth noting: recovery
+**does not guess**. A file matching neither hash is someone else's work, and it
+is neither rolled back nor marked applied.
+
+The descriptor is closed before the rename, because Windows will not rename over an
+open file. That reopens a small window, so the target is re-read and compared
+against the validated preimage immediately before the swap - a concurrent edit
+becomes a refusal rather than a silent overwrite.
+
+Every settled entry records `beforeSha` and `afterSha`, on the single-file path as
+well as the transactional one, so both are reconcilable after a crash.
+
 ## A proposal is judged as a whole, so it is applied as a whole
 
 Verification evaluates the entire proposed edit set at once. Applying it file by
