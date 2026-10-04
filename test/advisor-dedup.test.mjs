@@ -33,41 +33,66 @@ import { stubAnswering } from './helpers/stub-cli.mjs';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'wd-dedup-'));
 
+/**
+ * One shared directory for the signature tests.
+ *
+ * Those are pure -- nothing is spawned -- but cwd is part of the signature, so calling
+ * tmp() twice inside one test compares two different directories and the test fails
+ * for a reason that has nothing to do with signatures.
+ */
+const CWD = tmp();
+
+/**
+ * Assert a review actually reached the model.
+ *
+ * Without this the tests here are vacuous. The advisor spawns the CLI with the
+ * given cwd, so a cwd that does not exist fails the spawn with ENOENT -- which
+ * surfaces as status 'unavailable' and a verdict of 'unsure'. Every assertion
+ * about coalescing then passes on a review that never happened.
+ *
+ * Not hypothetical: an earlier version of this file used '/p' throughout and four
+ * of its tests were green for exactly that reason.
+ */
+function assertReviewed(r, what) {
+  assert.notEqual(r.status, 'unavailable', `${what}: the CLI never ran (${r.error ?? ''}) -- is the cwd real?`);
+  assert.ok(r.verdict, `${what}: no verdict came back`);
+  return r;
+}
 /* ------------------------------------------------------------------ *
  * The signature
  * ------------------------------------------------------------------ */
 
 test('the same fault seen twice has one signature', () => {
-  const a = { cwd: '/p', title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at x' };
-  const b = { cwd: '/p', title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at x' };
+  const a = { cwd: CWD, title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at x' };
+  const b = { cwd: CWD, title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at x' };
   assert.equal(findingSignature(a), findingSignature(b));
 });
 
 test('two faults sharing a message have different signatures', () => {
   // The case the old key could not tell apart.
-  const a = { cwd: '/p', title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at tally (/p/src/a.js:2)' };
-  const b = { cwd: '/p', title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at sum (/p/src/b.js:9)' };
+  const a = { cwd: CWD, title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at tally (/p/src/a.js:2)' };
+  const b = { cwd: CWD, title: 'ReferenceError', evidence: 'ReferenceError: count is not defined\n  at sum (/p/src/b.js:9)' };
   assert.notEqual(findingSignature(a), findingSignature(b));
 });
 
 test('the same fault from two directories is not merged', () => {
   const ev = 'boom';
-  assert.notEqual(findingSignature({ cwd: '/a', title: 't', evidence: ev }), findingSignature({ cwd: '/b', title: 't', evidence: ev }));
+  assert.notEqual(findingSignature({ cwd: CWD, title: 't', evidence: ev }), findingSignature({ cwd: tmp(), title: 't', evidence: ev }));
 });
 
 test('trailing whitespace and line endings do not split one fault into several', () => {
   // Shells re-emit the same error with different indentation and CRLF/LF. A raw
   // hash would call that several faults and pay for each, which is the exact cost
   // this key exists to avoid.
-  const a = findingSignature({ cwd: '/p', title: 't', evidence: 'boom\n  at x' });
-  const b = findingSignature({ cwd: '/p', title: 't', evidence: 'boom\r\n  at x   \r\n' });
+  const a = findingSignature({ cwd: CWD, title: 't', evidence: 'boom\n  at x' });
+  const b = findingSignature({ cwd: CWD, title: 't', evidence: 'boom\r\n  at x   \r\n' });
   assert.equal(a, b);
 });
 
 test('the title is compared case-insensitively', () => {
   assert.equal(
-    findingSignature({ cwd: '/p', title: 'ReferenceError', evidence: 'e' }),
-    findingSignature({ cwd: '/p', title: 'referenceerror', evidence: 'e' }),
+    findingSignature({ cwd: CWD, title: 'ReferenceError', evidence: 'e' }),
+    findingSignature({ cwd: CWD, title: 'referenceerror', evidence: 'e' }),
   );
 });
 
@@ -90,11 +115,13 @@ const problemAnswer = JSON.stringify({
 test('a concurrent duplicate receives the same answer instead of busy', async () => {
   const stub = countingStub(problemAnswer);
   const advisor = new Advisor({ cli: stub.cmd, model: null, timeoutMs: 60_000 });
-  const args = { evidence: 'ReferenceError: count is not defined\n  at tally', cwd: '/p', title: 'ReferenceError' };
+  const args = { evidence: 'ReferenceError: count is not defined\n  at tally', cwd: tmp(), title: 'ReferenceError' };
 
   const [first, second] = await Promise.all([advisor.review(args), advisor.review(args)]);
 
   // Neither is `busy`, and they agree.
+  assertReviewed(first, 'first');
+  assertReviewed(second, 'second');
   assert.notEqual(first.status, 'busy', 'the first request was dropped');
   assert.notEqual(second.status, 'busy', 'the second request got no answer at all');
   assert.equal(first.verdict, second.verdict);
@@ -107,13 +134,15 @@ test('a concurrent duplicate receives the same answer instead of busy', async ()
 test('genuinely different findings are not coalesced', async () => {
   const stub = countingStub(problemAnswer);
   const advisor = new Advisor({ cli: stub.cmd, model: null, timeoutMs: 60_000 });
-  const base = { cwd: '/p', title: 'ReferenceError' };
+  const base = { cwd: CWD, title: 'ReferenceError' };
 
   const [a, b] = await Promise.all([
     advisor.review({ ...base, evidence: 'ReferenceError: count is not defined\n  at tally (/p/src/a.js:2)' }),
     advisor.review({ ...base, evidence: 'ReferenceError: count is not defined\n  at sum (/p/src/b.js:9)' }),
   ]);
 
+  assertReviewed(a, 'fault a');
+  assertReviewed(b, 'fault b');
   assert.equal(a.coalesced, undefined, 'two different faults were merged into one');
   assert.equal(b.coalesced, undefined, 'two different faults were merged into one');
 });
@@ -130,7 +159,7 @@ test('two terminals in one directory no longer collide away a review', async () 
 
   const results = await Promise.all([advisor.review(args), advisor.review(args)]);
   for (const r of results) {
-    assert.equal(r.status, undefined, `a request was refused: ${r.status} ${r.error ?? ''}`);
+    assertReviewed(r, 'two-terminal request');
     assert.ok(r.verdict, 'a request came back with no verdict');
   }
 });
@@ -140,10 +169,10 @@ test('a review that finishes is not coalesced against later', async () => {
   // signature would silently join a review that finished minutes ago.
   const stub = countingStub(problemAnswer);
   const advisor = new Advisor({ cli: stub.cmd, model: null, timeoutMs: 60_000 });
-  const args = { evidence: 'once', cwd: '/p', title: 'T' };
+  const args = { evidence: 'once', cwd: tmp(), title: 'T' };
 
   await advisor.review(args);
-  const later = await advisor.review(args);
+  const later = assertReviewed(await advisor.review(args), 'later review');
   assert.notEqual(later.coalesced, true, 'a stale in-flight entry was joined');
 });
 
