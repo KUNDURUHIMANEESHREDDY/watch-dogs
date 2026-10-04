@@ -26,7 +26,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Applier } from '../src/act/apply.mjs';
@@ -95,8 +95,22 @@ test('stale scratch files are found only when old enough', () => {
   const root = project();
   const junk = join(root, 'src', `${TMP_PREFIX}12345-deadbeef.js`);
   writeFileSync(junk, 'half a file', 'utf8');
-  assert.deepEqual(staleTempFiles([join(root, 'src')], { olderThanMs: 60_000 }), [], 'a fresh scratch file was called stale');
-  const found = staleTempFiles([join(root, 'src')], { olderThanMs: 0 });
+
+  // The mtime is set explicitly rather than relying on `olderThanMs: 0` to mean
+  // "now". A file written in the same millisecond as the check has
+  // mtimeMs === cutoff, and the predicate is strictly less-than, so the boundary
+  // case made this fail intermittently -- roughly one run in three.
+  const fresh = new Date();
+  const old = new Date(Date.now() - 600_000);
+  utimesSync(junk, fresh, fresh);
+  assert.deepEqual(
+    staleTempFiles([join(root, 'src')], { olderThanMs: 60_000 }),
+    [],
+    'a fresh scratch file was called stale',
+  );
+
+  utimesSync(junk, old, old);
+  const found = staleTempFiles([join(root, 'src')], { olderThanMs: 60_000 });
   assert.equal(found.length, 1, JSON.stringify(found));
   assert.equal(removeTemp(found[0]), true);
   assert.equal(existsSync(junk), false);

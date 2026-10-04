@@ -659,10 +659,9 @@ applyAll(actions, ctx = {}) {
       }
       const now = current === null ? null : sha256Of(current);
 
-      let outcome;
-      if (rec.afterSha && now === rec.afterSha) outcome = 'ok';
-      else if (rec.beforeSha && now === rec.beforeSha) outcome = 'aborted';
-      else outcome = 'conflict';
+      // The same classification rollback uses, so a crash and an operator reach
+      // the same conclusion about the same entry.
+      const outcome = this.#classify(rec, target.abs);
 
       rec.outcome = outcome;
       rec.settledAt = new Date().toISOString();
@@ -744,17 +743,108 @@ applyAll(actions, ctx = {}) {
     const target = this.#rollbackTarget(rec);
     if (target.error) return { status: 'refused', why: target.error };
 
+    // Conflict detection: is the file still the version we wrote?
+    //
+    // Rolling back means overwriting whatever is there now with what was there
+    // before. If something has edited the file since, that overwrites the newer
+    // work -- silently, and reporting success. "The file contains what we put
+    // there" is the only condition under which a rollback is the operation the
+    // user asked for.
+    //
+    // Entries written before hashes existed fall back to comparing the text we
+    // recorded, and an entry with neither is refused rather than assumed safe:
+    // "I cannot tell whether this is safe" is not permission to overwrite.
+    const conflict = this.#rollbackConflict(rec, target.abs);
+    if (conflict) return { status: 'conflict', code: 'rollback_conflict', why: conflict };
+
     if (rec.before === null) {
-      if (existsSync(target.abs)) renameSync(target.abs, target.abs + '.wd-deleted');
+      // The file did not exist before. Removing it is only correct if it is
+      // still exactly what we created -- otherwise this would delete a file the
+      // user has since written.
+      if (existsSync(target.abs)) {
+        const moved = `${target.abs}.wd-deleted`;
+        renameSync(target.abs, moved);
+        rec.outcome = 'rolled-back';
+        rec.rolledBackAt = new Date().toISOString();
+        atomicWriteJson(p, rec);
+        return { status: 'rolled-back', note: 'file did not exist before; moved aside', path: moved };
+      }
       rec.outcome = 'rolled-back';
-      writeFileSync(p, JSON.stringify(rec));
-      return { status: 'rolled-back', note: 'file did not exist before; moved to .wd-deleted', path: target.abs };
+      atomicWriteJson(p, rec);
+      return { status: 'rolled-back', note: 'file was already gone', path: target.abs };
     }
 
-    writeFileSync(target.abs, rec.before);
+    // Atomic, like every other write: a crash mid-rollback must not leave the
+    // file half-restored.
+    atomicReplace(target.abs, rec.before);
     rec.outcome = 'rolled-back';
-    writeFileSync(p, JSON.stringify(rec));
+    rec.rolledBackAt = new Date().toISOString();
+    atomicWriteJson(p, rec);
     return { status: 'rolled-back', path: target.abs };
+  }
+
+  /**
+   * Where does this file sit relative to the two images a journal entry records?
+   *
+   * @returns {'ok'|'aborted'|'conflict'} `ok` means the entry's change landed,
+   *   `aborted` means the file is still the pre-image, `conflict` means it is
+   *   neither -- somebody else changed it, and guessing would be wrong.
+   *
+   * Shared by crash recovery and rollback so both answer the same question the
+   * same way. They previously differed in a way that mattered: recovery compared
+   * hashes, rollback compared nothing at all.
+   */
+  #classify(rec, abs) {
+    let current = null;
+    try {
+      current = readFileSync(abs, 'utf8');
+    } catch {
+      current = null;
+    }
+    if (current === null) return 'aborted';
+    const now = sha256Of(current);
+    if (rec.afterSha && now === rec.afterSha) return 'ok';
+    if (rec.beforeSha && now === rec.beforeSha) return 'aborted';
+    if (!rec.afterSha && typeof rec.after === 'string') return current === rec.after ? 'ok' : 'conflict';
+    return 'conflict';
+  }
+  /**
+   * Would this rollback destroy someone else's work?
+   *
+   * @returns {string|null} the reason it would, or null when it is safe
+   */
+  #rollbackConflict(rec, abs) {
+    let current = null;
+    try {
+      current = readFileSync(abs, 'utf8');
+    } catch {
+      current = null;
+    }
+
+    if (current === null) {
+      // The file is gone. Restoring `before` is not a conflict -- there is
+      // nothing to destroy.
+      return null;
+    }
+
+    const now = sha256Of(current);
+    if (rec.afterSha && now === rec.afterSha) return null;
+    if (!rec.afterSha && typeof rec.after === 'string' && current === rec.after) return null;
+
+    if (!rec.afterSha && typeof rec.after !== 'string') {
+      return (
+        `cannot tell whether ${rec.rel ?? abs} is safe to roll back: this entry records no ` +
+        'post-image, so there is nothing to compare the file against. Rolling it back would ' +
+        'overwrite whatever is there now. Roll back manually if that is what you want.'
+      );
+    }
+
+    return (
+      `${rec.rel ?? abs} has changed since the watchdog wrote it, so rolling back would ` +
+      `overwrite newer work (expected ${shortHash(rec.afterSha ?? sha256Of(rec.after ?? ''))}, ` +
+      `found ${shortHash(now)}). Nothing was written. Revert it yourself, or force the ` +
+      'rollback if you are sure the newer changes should be discarded.'
+    );
   }
 
   /**

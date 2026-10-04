@@ -275,6 +275,45 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Rollback will not destroy work it never made
+
+Rollback means overwriting whatever is at the path now with what was there before
+the watchdog touched it. If the file has been edited since, that silently eats
+the newer work:
+
+```
+watchdog fixes a file
+  -> you edit the same file
+    -> wd rollback <id>
+      -> your changes are gone, and it reports success
+```
+
+The only condition under which a rollback is the operation you asked for is that
+the file still contains exactly what the watchdog wrote. So that is checked
+first, against the `afterSha` the journal already records:
+
+```
+src/a.js has changed since the watchdog wrote it, so rolling back would
+overwrite newer work (expected a3f2b1c9d4e5..., found 7c8d9e0f1a2b...).
+Nothing was written. Revert it yourself, or force the rollback if you are sure
+the newer changes should be discarded.
+```
+
+Two related decisions:
+
+- **An entry with no post-image is refused, not assumed safe.** Entries written
+  before hashes existed fall back to comparing the recorded text. An entry with
+  neither is refused: "I cannot tell whether this is safe" is not permission to
+  overwrite.
+- **A created file is removed only while it is still what we created.** The
+  new-file path moved the file aside unconditionally, which would have taken a
+  file you had started using.
+
+Rollback and crash recovery now share one classifier, because they ask the same
+question of the same record. They previously differed in a way that mattered:
+recovery compared hashes and rollback compared nothing at all. Rollback is also
+atomic now, like every other write.
+
 ## A crash cannot leave a file half-written, or a change unrecorded
 
 Writing was `truncate` then `write`. That has two bad windows:
