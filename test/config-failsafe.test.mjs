@@ -49,10 +49,15 @@ function withIsolatedHome(fn) {
   }
 }
 
-test('the default autonomy is still autonomous', () => {
-  // Load-bearing for the whole finding: if this ever changes to `suggest`, the
-  // fail-open no longer escalates and these tests would pass vacuously.
-  assert.equal(DEFAULTS.autonomy, 'autonomous');
+test('the default is the least permissive mode', () => {
+  // This assertion used to be the other way round, and the comment explained why
+  // pinning it mattered: with utonomous as the default, an unreadable config
+  // escalated to the most permissive mode, which is what this whole file is about.
+  //
+  // The default is now suggest, so that escalation is no longer merely caught --
+  // it is structurally impossible. A broken config cannot grant a mode it did not
+  // name, because there is no more permissive default to fall back to.
+  assert.equal(DEFAULTS.autonomy, 'suggest');
 });
 
 test('a truncated config cannot escalate suggest into autonomous', () => {
@@ -150,8 +155,11 @@ test('a broken project layer cannot be overridden into autonomous by defaults', 
     writeProjectConfig(root, 'not json at all');
 
     const cfg = loadConfig({ cwd: root, projectRoot: root });
-    assert.notEqual(cfg.autonomy, DEFAULTS.autonomy);
+    // A broken layer yields the safest mode. This used to assert the result
+    // *differed* from the default, because the default was autonomous and the
+    // whole point was that the failure did not inherit it.
     assert.equal(cfg.autonomy, 'suggest');
+    assert.notEqual(cfg.autonomy, 'autonomous');
   });
 });
 

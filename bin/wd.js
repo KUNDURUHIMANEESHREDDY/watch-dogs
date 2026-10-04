@@ -1,4 +1,4 @@
-import { loadConfig } from '../src/core/config.mjs';
+import { loadConfig, saveConfig } from '../src/core/config.mjs';
 import { initLog, log } from '../src/core/log.mjs';
 import { Watcher } from '../src/core/watcher.mjs';
 import { TranscriptTailer, SessionRegistry, TranscriptDiscovery, transcriptDir } from '../src/capture/shell.mjs';
@@ -35,7 +35,9 @@ const HELP = `
 ${col('b', 'wd')} - cross-terminal watchdog
 
 ${col('b', 'USAGE')}
-  wd init [--dry-run]            wire this machine's shells + IDE terminals
+  wd init [--dry-run] [--autonomous|--allowlist]
+                               wire this machine's shells + IDE terminals
+                               (autonomy defaults to suggest; --autonomous opts in and records it)
   wd autostart [--remove|--status] start the daemon at logon, or inspect it
   wd uninstall                   remove the managed blocks
   wd start                       start the daemon (foreground)
@@ -97,6 +99,8 @@ function parseFlags(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--dry-run') f.dryRun = true;
+    else if (a === '--autonomous') f.autonomous = true;
+    else if (a === '--allowlist') f.allowlist = true;
     else if (a === '--remove') f.remove = true;
     else if (a === '--status') f.status = true;
     else if (a === '--min') f.min = args[++i];
@@ -109,6 +113,29 @@ function parseFlags(args) {
 
 function cmdInit(flags) {
   const dryRun = flags.dryRun;
+
+  // Autonomy is chosen here, once, and written down. Previously a fresh install
+  // inherited `autonomous` from the defaults, so the most permissive mode was
+  // what you got by doing nothing, and nothing recorded that anyone had asked
+  // for it.
+  const chosen = flags.autonomous ? 'autonomous' : flags.allowlist ? 'allowlist' : null;
+  if (chosen && !dryRun) {
+    const here = loadConfig({ cwd: process.cwd() });
+    const file = join(here.projectRoot, '.watchdog', 'config.json');
+    let existing = {};
+    try {
+      existing = JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+    } catch {
+      existing = {};
+    }
+    existing.autonomy = chosen;
+    saveConfig({ ...here, ...existing, projectRoot: here.projectRoot });
+    out(col('g', 'autonomy  ') + chosen + col('d', '  (written to ' + file + ')'));
+  } else if (chosen) {
+    out(col('y', 'dry run: would write autonomy=') + chosen);
+  } else if (!dryRun) {
+    out(col('d', 'autonomy  suggest  (the default; pass --autonomous or --allowlist to change it)'));
+  }
   if (dryRun) out(col('y', 'dry run: nothing will be written\n'));
   out(col('b', 'PowerShell profile in use: ') + effectivePsProfile());
   if (dryRun) {
@@ -359,6 +386,9 @@ async function cmdDoctor(flags) {
   out(`data dir       ${cfg.paths.data}${existsSync(cfg.paths.data) ? '' : col('y', '  (not created yet)')}`);
   out(`autonomy       ${cfg.autonomy}${cfg.autonomy === 'autonomous' ? col('y', '  <- applies fixes without asking') : ''}`);
   reportUnreadableConfig(cfg);
+  if (!cfg.autonomyExplicit) {
+    out(col('y', 'autonomy has never been chosen explicitly') + col('d', '  run: wd init --autonomous  (or --allowlist)'));
+  }
   out(`llm advisor    ${cfg.analyze.llm.enabled ? cfg.analyze.llm.cli : 'disabled'}${cfg.analyze.llm.model ? ` (${cfg.analyze.llm.model})` : ''}`);
   out('');
 
@@ -452,7 +482,7 @@ function cmdStatus() {
   const llm = cfg.analyze.llm.enabled
     ? cfg.analyze.llm.cli + (cfg.analyze.llm.model ? ' ' + cfg.analyze.llm.model : '')
     : 'disabled';
-  out('  ' + col('b', 'autonomy'.padEnd(15)) + ' ' + cfg.autonomy + (cfg.autonomy === 'autonomous' ? col('y', '  (applies fixes without asking)') : ''));
+  out('  ' + col('b', 'autonomy'.padEnd(15)) + ' ' + cfg.autonomy + (cfg.autonomy === 'autonomous' ? col('y', '  (applies fixes without asking)') : '') + (cfg.autonomyExplicit ? '' : col('d', '  (never chosen explicitly -- this is the default)')));
   reportUnreadableConfig(cfg, '    ');
   out('  ' + col('b', 'llm advisor'.padEnd(15)) + ' ' + llm);
   out('  ' + col('b', 'daemon'.padEnd(15)) + ' ' + beat.detail);

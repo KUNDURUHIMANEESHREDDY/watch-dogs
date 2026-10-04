@@ -8,7 +8,19 @@ import { log } from './log.mjs';
  * Project config wins, which is what you want for a per-repo autonomy choice.
  */
 export const DEFAULTS = Object.freeze({
-  autonomy: 'autonomous', // suggest | allowlist | autonomous  (rail denylist applies regardless)
+  // A fresh install starts at the least permissive setting, and says so.
+  //
+  // This used to be 'autonomous', which meant nobody had chosen anything: a
+  // project with no config file anywhere inherited the setting that lets the
+  // watchdog modify code without asking, and the obvious reading of "it is
+  // running on its own" was that somebody had turned that on. They had not.
+  //
+  // 'suggest' is the correct default for a tool whose whole purpose is editing
+  // code on a machine it does not own. Opting in is one flag on `wd init`, and
+  // the choice is written to config so it is recorded rather than inherited.
+  // A config that states autonomy explicitly is always honoured, so existing
+  // setups are not reset by this change.
+  autonomy: 'suggest', // suggest | allowlist | autonomous  (rail denylist applies regardless)
   capture: {
     layers: {
       shell: true, //   layer 1: profile-injected session capture
@@ -187,6 +199,12 @@ export function loadConfig({ cwd = process.cwd(), projectRoot } = {}) {
 
   if (!merged.paths.data) merged.paths.data = join(root, '.watchdog');
   else if (!isAbsolute(merged.paths.data)) merged.paths.data = resolve(root, merged.paths.data);
+
+  // Whether the mode was chosen or merely inherited. `wd status` and `wd doctor`
+  // say so, because "autonomy: autonomous" reads as a decision and, before this
+  // was recorded, it was never one.
+  merged.autonomyExplicit =
+    layers.some(([, l]) => !l.unreadable && isPlainObject(l.value) && typeof l.value.autonomy === 'string');
 
   if (!['suggest', 'allowlist', 'autonomous'].includes(merged.autonomy)) {
     throw new Error(`autonomy must be suggest|allowlist|autonomous, got ${JSON.stringify(merged.autonomy)}`);
