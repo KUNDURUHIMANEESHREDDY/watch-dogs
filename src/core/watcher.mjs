@@ -384,34 +384,29 @@ export class Watcher extends EventEmitter {
       return;
     }
 
-    const results = [];
-    // The preimage each file had when it was verified, so the write can refuse if
-    // the file is no longer that version.
+    // One transaction for the whole proposal.
+    //
+    // Verification judged all of these together, so applying them one at a time
+    // could leave a mixture that passed no check: one file written, two refused,
+    // and the repository in a state nobody verified. The applier opens and
+    // validates every target first and writes only if all of them pass.
     const preimages = new Map((verdict.preimages ?? []).map((p) => [p.path, p.sha256]));
 
-    for (const file of canonical) {
-      results.push(
-        // `cwd: this.projectRoot`, not `rec.cwd`. The path is project-root-relative
-        // now, so resolving it against the session directory would put it back
-        // exactly where it started. source: 'llm' so the guard applies the
-        // file-class policy -- without it the model could rewrite a CI workflow or
-        // a package manifest here, because the existing rails only ask whether
-        // the path is forbidden.
-        this.#applier.apply(
-          {
-            kind: 'patch-file',
-            path: file.path,
-            find: file.find,
-            replace: file.replace,
-            // Enforced inside the applier, not trusted from here. If the file
-            // changed between the check and this write, the result is `stale` and
-            // nothing is written.
-            expectPreimage: preimages.get(file.path),
-          },
-          { cwd: this.projectRoot, source: 'llm' },
-        ),
-      );
-    }
+    const tx = this.#applier.applyAll(
+      canonical.map((file) => ({
+        kind: 'patch-file',
+        path: file.path,
+        find: file.find,
+        replace: file.replace,
+        // Enforced inside the applier, not trusted from here.
+        expectPreimage: preimages.get(file.path),
+      })),
+      // `cwd: this.projectRoot`, not `rec.cwd`: the paths are project-root-relative
+      // now, so resolving them against the session directory would put them back
+      // where they started. `source: 'llm'` applies the file-class policy.
+      { cwd: this.projectRoot, source: 'llm' },
+    );
+    const results = tx.results;
 
     // Every file's outcome is kept. Storing only the first result made a
     // three-file fix in which two writes were refused and one succeeded read as a

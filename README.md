@@ -275,6 +275,52 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## A proposal is judged as a whole, so it is applied as a whole
+
+Verification evaluates the entire proposed edit set at once. Applying it file by
+file could leave the repository in a state that passed no check:
+
+```
+3 files proposed -> 1 applied, 1 refused, 1 skipped
+                    the repository now holds a mixture nothing verified
+```
+
+Recording that outcome faithfully is not the same as avoiding it. The record was
+accurate and the repository was still wrong.
+
+So the write is two-phase:
+
+```
+preflight   open every target through the validated handle, read it, check the
+            anchor is present and unique, check the preimage hash, syntax-check
+            the result. Nothing is written.
+commit      only if every file passed, write them all and journal them all.
+```
+
+A refusal therefore lands **before any byte is written**, which is the case that
+actually occurs: the model proposed a CI workflow and two sources, the workflow is
+refused by the file-class policy, and nothing needed undoing.
+
+Descriptors are held open from preflight through commit on purpose. It makes the
+preimage the exact bytes that get written rather than a re-read that might differ,
+which is the same guarantee the preimage check exists to provide.
+
+Some consequences worth knowing:
+
+- A `command` or `install-deps` action cannot ride along in a file transaction.
+  It is refused rather than half-applied beside patches.
+- A proposal touching more than 25 files is refused outright. A set too large to
+  apply atomically is not a set to apply in parts.
+- Each held-back file says *why*: it was not written because another file in the
+  same proposal was refused, and a partial edit would leave the project in a state
+  that was never verified.
+
+**What this is not:** a durable transaction. If a write fails mid-commit,
+already-written files are restored from the in-memory preimages - a best-effort
+undo, and the restore itself is reported. But a crash between two writes is still
+a torn edit, and closing *that* needs atomic file replacement rather than
+anything a method like this can do.
+
 ## Verification proves a version; the file may change
 
 Staged verification copies the project, applies the proposal to the copy, and runs

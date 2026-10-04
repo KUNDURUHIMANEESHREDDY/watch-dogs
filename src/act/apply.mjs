@@ -318,6 +318,195 @@ export class Applier {
     });
   }
 
+  /**
+ * Apply a set of edits as one transaction.
+ *
+ * Verification judges the whole proposed set at once, so applying it file by file
+ * could leave the repository in a state nobody verified: three files proposed,
+ * one applied, two refused, and the result is a mixture that passed no check.
+ * Recording that outcome faithfully is not the same as avoiding it.
+ *
+ * So this is two-phase:
+ *
+ *   preflight   open every target through the validated handle, read it, check
+ *               the anchor is present and unique, check the preimage hash, and
+ *               syntax-check the result. Nothing is written.
+ *   commit      only if every file passed, write them all and journal them all.
+ *
+ * A refusal therefore happens before any byte is written, which is the case that
+ * actually occurs: the model proposed a manifest and two sources, the manifest is
+ * refused by the file-class policy, and nothing needed undoing.
+ *
+ * Holding the descriptors from preflight through commit is deliberate. It makes
+ * the preimage the exact bytes that get written, rather than a re-read that might
+ * differ -- which is the same guarantee the preimage check exists to provide.
+ *
+ * If a write fails *during* commit, files already written are restored from the
+ * in-memory preimages. That is a best-effort undo, not a durable transaction: a
+ * crash between two writes is still a torn edit, and closing that needs atomic
+ * file replacement rather than anything this method can do.
+ *
+ * @returns {{status: string, results: object[], written: number}}
+ */
+applyAll(actions, ctx = {}) {
+  const list = Array.isArray(actions) ? actions : [];
+  if (!list.length) return { status: 'none', results: [], written: 0 };
+  if (list.length > MAX_TRANSACTION_FILES) {
+    return {
+      status: 'refused',
+      results: list.map(() => ({
+        status: 'refused',
+        why: `a proposal touching more than ${MAX_TRANSACTION_FILES} files is refused rather than applied in parts`,
+      })),
+      written: 0,
+    };
+  }
+
+  // ---- phase 1: preflight. No writes.
+  const prepared = [];
+  const results = new Array(list.length).fill(null);
+
+  for (let i = 0; i < list.length; i++) {
+    const action = list[i];
+
+    const gate = this.#gate(action, ctx);
+    if (gate) {
+      results[i] = gate;
+      continue;
+    }
+    if (action.kind !== 'patch-file') {
+      // Commands and installs are not part of a file transaction; they are
+      // refused here rather than silently half-applied alongside patches.
+      results[i] = {
+        status: 'refused',
+        why: `a file transaction cannot include a ${action.kind} action; run it separately`,
+      };
+      continue;
+    }
+
+    const root = ctx.cwd ?? this.projectRoot;
+    const opened = openContained(root, action.path, { flags: 'r+' });
+    if (!opened.ok) {
+      results[i] = {
+        status: 'skipped',
+        why:
+          opened.why === 'missing'
+            ? `target file does not exist: ${action.path}`
+            : opened.why === 'not-a-file'
+              ? `target is not a regular file: ${action.path}`
+              : `${action.path} was not opened for writing: ${opened.detail}`,
+      };
+      continue;
+    }
+
+    let before;
+    try {
+      before = readFd(opened.fd, 'utf8');
+    } catch (e) {
+      safeClose(opened.fd);
+      results[i] = { status: 'skipped', why: `could not read ${action.path}: ${e.message}` };
+      continue;
+    }
+
+    if (action.expectPreimage) {
+      const actual = sha256Of(before);
+      if (actual !== action.expectPreimage) {
+        safeClose(opened.fd);
+        results[i] = {
+          status: 'stale',
+          code: 'stale_preimage',
+          why:
+            `${action.path} changed after it was verified (expected ${shortHash(action.expectPreimage)}, ` +
+            `found ${shortHash(actual)}). The fix was proved against a different version of this file.`,
+        };
+        continue;
+      }
+    }
+
+    const at = before.indexOf(action.find);
+    if (at < 0) {
+      safeClose(opened.fd);
+      results[i] = { status: 'skipped', why: `quoted "find" text is not present in ${action.path}; the model invented it` };
+      continue;
+    }
+    if (before.indexOf(action.find, at + 1) !== -1) {
+      safeClose(opened.fd);
+      results[i] = { status: 'skipped', why: `"find" text is ambiguous (appears more than once) in ${action.path}` };
+      continue;
+    }
+
+    const after = before.slice(0, at) + action.replace + before.slice(at + action.find.length);
+    if (syntaxVerdict(opened.abs, after) === 'invalid') {
+      safeClose(opened.fd);
+      results[i] = {
+        status: 'skipped',
+        why:
+          `the edit would leave ${action.path} unparseable, so it was not applied. ` +
+          'The replacement text did not fit the place the anchor was found.',
+      };
+      continue;
+    }
+
+    // Held open until commit, so the bytes written are the bytes validated.
+    prepared.push({ index: i, action, fd: opened.fd, abs: opened.abs, before, after, ctx });
+  }
+
+  if (results.some((r) => r !== null)) {
+    // Something failed. Release every descriptor and write nothing at all.
+    for (const p of prepared) safeClose(p.fd);
+    for (const p of prepared) {
+      results[p.index] = {
+        status: 'skipped',
+        why:
+          'not applied: another file in the same proposal was refused, and a partial edit would leave ' +
+          'the project in a state that was never verified.',
+      };
+    }
+    const counts = aggregateTx(results);
+    return { status: counts.status, results, written: 0 };
+  }
+
+  // ---- phase 2: commit. Everything was validated.
+  const written = [];
+  try {
+    for (const p of prepared) {
+      writeFd(p.fd, p.after);
+      this.#pendingSnapshots.set(p.abs, Buffer.from(p.before, 'utf8'));
+      results[p.index] = this.#journal({ type: 'patch', abs: p.abs, before: p.before, after: p.after, ctx, action: p.action });
+      written.push(p);
+    }
+  } catch (e) {
+    // Undo what landed. The preimages are in memory, so this restores exactly the
+    // bytes that were there -- no separate backup file needed.
+    const undone = [];
+    for (const p of written) {
+      try {
+        writeFd(p.fd, p.before);
+        undone.push(p.action.path);
+      } catch {
+        /* reported below; nothing more can be done for this one */
+      }
+    }
+    for (const p of prepared) safeClose(p.fd);
+    for (const p of written) results[p.index] = { status: 'error', why: `write failed and was rolled back: ${e.message}` };
+
+    return {
+      status: 'rolled-back',
+      results,
+      written: 0,
+      detail: undone.length
+        ? `restored ${undone.length} file(s): ${undone.join(', ')}`
+        : 'nothing had been written yet',
+    };
+  }
+
+  for (const p of prepared) safeClose(p.fd);
+  const counts = aggregateTx(results);
+  return { status: counts.status, results, written: prepared.length };
+}
+
+
+
   #journal({ type, abs, before, after, ctx, action }) {
     this.#pendingSnapshots.delete(abs);
     const rec = this.#appendJournal({ type, abs, before, after, ctx, action, outcome: 'ok' });
@@ -615,3 +804,17 @@ export function unifiedDiff(before, after, path = 'file') {
   }
   return out.join('\n');
 }
+
+/** Summarise a transaction's per-file outcomes. */
+function aggregateTx(results) {
+  const applied = results.filter((r) => r?.status === 'applied').length;
+  const n = results.length;
+  let status;
+  if (applied === n) status = 'all_applied';
+  else if (applied === 0) status = results.some((r) => r?.status === 'refused') ? 'refused' : 'none_applied';
+  else status = 'partially_applied';
+  return { status, applied, total: n, allApplied: applied === n };
+}
+
+/** A proposal this large is not something to apply in parts. */
+const MAX_TRANSACTION_FILES = 25;
