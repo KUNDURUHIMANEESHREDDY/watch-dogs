@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Applier } from '../src/act/apply.mjs';
+import { Applier, installArgv } from '../src/act/apply.mjs';
 import { repairArgv } from '../src/act/deps.mjs';
 import { evaluate } from '../src/analyze/rules.mjs';
 
@@ -33,10 +33,73 @@ test('the npm-install-failed rule no longer emits a raw command', () => {
   assert.equal(f.fix.argv, undefined, 'no bare npm install argv may be embedded');
 });
 
-test('repair uses the lockfile, never bare npm install', () => {
-  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'package-lock.json': '{}' })), ['npm', 'ci']);
-  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'yarn.lock': '' })), ['yarn', 'install', '--frozen-lockfile']);
-  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'pnpm-lock.yaml': '' })), ['pnpm', 'install', '--frozen-lockfile']);
+test('repair uses the lockfile and never bare npm install', () => {
+  // The trailing flags matter as much as the verb: `npm ci` alone executes every
+  // postinstall script in the tree with the user's privileges.
+  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'package-lock.json': '{}' })), [
+    'npm',
+    'ci',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+  ]);
+  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'yarn.lock': '' })), [
+    'yarn',
+    'install',
+    '--frozen-lockfile',
+    '--ignore-scripts',
+  ]);
+  assert.deepEqual(repairArgv(project({ 'package.json': '{}', 'pnpm-lock.yaml': '' })), [
+    'pnpm',
+    'install',
+    '--frozen-lockfile',
+    '--ignore-scripts',
+  ]);
+});
+
+test('no generated install can run a lifecycle script', () => {
+  // The invariant, asserted across every shape the argv builders can produce.
+  // A future flag added to one ecosystem and forgotten in another would otherwise
+  // silently reopen the vector.
+  const shapes = [
+    repairArgv(project({ 'package.json': '{}', 'package-lock.json': '{}' })),
+    repairArgv(project({ 'package.json': '{}', 'yarn.lock': '' })),
+    repairArgv(project({ 'package.json': '{}', 'pnpm-lock.yaml': '' })),
+    installArgv('left-pad', project({ 'package.json': '{"dependencies":{"left-pad":"^1.0.0"}}', 'package-lock.json': '{}' }), 'node'),
+    installArgv('left-pad', project({ 'package.json': '{"dependencies":{"left-pad":"^1.0.0"}}' }), 'node'),
+  ];
+  for (const argv of shapes) {
+    assert.ok(argv.length, 'shape produced no command at all');
+    assert.ok(
+      argv.includes('--ignore-scripts') || argv.includes('--only-binary=:all:'),
+      `${argv.join(' ')} can run install scripts`,
+    );
+    assert.ok(!argv.includes('--ignore-scripts=false'), `${argv.join(' ')} re-enables scripts explicitly`);
+  }
+});
+
+test('python installs refuse to build from source, since pip has no ignore-scripts', () => {
+  const root = project({
+    'package.json': '{}',
+    'requirements.txt': 'requests==2.31.0\n',
+    '.venv/Scripts/python.exe': '',
+  });
+  const argv = installArgv('requests', root, 'python');
+  assert.ok(argv.includes('--only-binary=:all:'), `expected a wheels-only install, got ${argv.join(' ')}`);
+});
+
+test('python install no longer passes the venv interpreter as an absolute path', () => {
+  // Regression from the typed command policy: it refuses absolute executables on
+  // purpose, so an absolute path here meant every Python install was refused.
+  const root = project({
+    'package.json': '{}',
+    'requirements.txt': 'requests==2.31.0\n',
+    '.venv/Scripts/python.exe': '',
+  });
+  const argv = installArgv('requests', root, 'python');
+  assert.ok(argv.length, 'expected a command');
+  assert.ok(!argv[0].includes('/') && !argv[0].includes('\\'), `${argv[0]} is a path`);
+  assert.equal(argv[0], 'python');
 });
 
 test('repair refuses when there is no lockfile', () => {

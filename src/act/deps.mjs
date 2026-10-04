@@ -197,12 +197,85 @@ export function hasLockfile(root) {
  * So this is lockfile-only. With no lockfile there is nothing safe to do
  * automatically, and the caller refuses.
  */
+/**
+ * Every generated install runs with lifecycle scripts disabled.
+ *
+ * `--ignore-scripts` is the whole mitigation for the biggest thing left in
+ * dependency repair. Deciding *which package* to install is now allowlisted and
+ * lockfile-pinned, so the attacker can no longer choose the name -- but an
+ * install still executes whatever the package's own `postinstall` says, with the
+ * user's privileges and no container around it. The package is already trusted
+ * to run code; the question is only whether *we* are the thing that hands it the
+ * keys. This says no.
+ *
+ * The cost is real and worth stating: a native module (`better-sqlite3`, `sharp`)
+ * genuinely needs its build step, so an install with scripts disabled produces a
+ * package that is installed and broken. That is why `installScriptsIn` exists --
+ * to refuse the repair up front and name the package, rather than let it half-succeed.
+ *
+ * pip has no equivalent flag, so the closest thing is refusing to build from
+ * source: a wheel's install is declarative, while an sdist runs the package's
+ * own `setup.py` under full privileges.
+ */
+export const NO_SCRIPTS = Object.freeze({
+  npm: ['--ignore-scripts', '--no-audit', '--no-fund'],
+  pnpm: ['--ignore-scripts'],
+  yarn: ['--ignore-scripts'],
+  python: ['--only-binary=:all:'],
+});
+
 export function repairArgv(root) {
   const lock = lockfileKind(root);
-  if (lock === 'pnpm') return ['pnpm', 'install', '--frozen-lockfile'];
-  if (lock === 'yarn') return ['yarn', 'install', '--frozen-lockfile'];
-  if (lock === 'npm') return ['npm', 'ci'];
+  if (lock === 'pnpm') return ['pnpm', 'install', '--frozen-lockfile', ...NO_SCRIPTS.pnpm];
+  if (lock === 'yarn') return ['yarn', 'install', '--frozen-lockfile', ...NO_SCRIPTS.yarn];
+  if (lock === 'npm') return ['npm', 'ci', ...NO_SCRIPTS.npm];
   return [];
+}
+
+/**
+ * Packages whose install would try to run code, if scripts were enabled.
+ *
+ * Read from the lockfile rather than guessed: npm records `hasInstallScript` per
+ * package, so this names exactly the packages that would execute something rather
+ * than blanket-refusing every project that happens to depend on a native module.
+ *
+ * @returns {{name: string, why: string}[]}
+ */
+export function installScriptsIn(root) {
+  const out = [];
+
+  // The project's own lifecycle scripts run on every install.
+  const pkgPath = join(root, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const scripts = JSON.parse(stripBom(readFileSync(pkgPath, 'utf8')))?.scripts ?? {};
+      for (const hook of ['preinstall', 'install', 'postinstall', 'prepare']) {
+        if (typeof scripts[hook] === 'string' && scripts[hook].trim()) {
+          out.push({ name: `${hook} in package.json`, why: scripts[hook].slice(0, 120) });
+        }
+      }
+    } catch {
+      /* an unreadable manifest is not this function's problem */
+    }
+  }
+
+  const lockPath = join(root, 'package-lock.json');
+  if (existsSync(lockPath)) {
+    try {
+      const lock = JSON.parse(stripBom(readFileSync(lockPath, 'utf8')));
+      for (const [where, meta] of Object.entries(lock.packages ?? {})) {
+        if (meta?.hasInstallScript) out.push({ name: where || '(root)', why: 'lockfile records an install script' });
+      }
+    } catch {
+      /* ditto */
+    }
+  }
+
+  return out;
+}
+
+function stripBom(s) {
+  return s.replace(/^\uFEFF/, '');
 }
 export function lockfileKind(root) {
   if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';

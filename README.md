@@ -275,6 +275,56 @@ and asserts against the bytes that actually crossed the socket -- URL, auth,
 content type, and the decoded span. With credentials present the same run reports
 to the cloud instead, no extra flag.
 
+## Dependency repair does not hand a package your credentials
+
+Repair already decided *which* package to install: it must be declared, the
+ecosystem must match, and the install goes through the lockfile rather than by
+name. That closes the injection vector -- whoever controls terminal output can no
+longer choose what gets installed.
+
+None of that touches what actually happens during an install. The package runs its
+own `postinstall` script, with the user's privileges, on the user's machine, with
+nothing around it. The package is already trusted to run code; the only remaining
+question is whether the watchdog is the thing that hands it the keys.
+
+So every generated install runs with lifecycle scripts disabled:
+
+| | |
+|---|---|
+| npm | `--ignore-scripts --no-audit --no-fund` |
+| pnpm / yarn | `--ignore-scripts` |
+| pip | `--only-binary=:all:` |
+
+pip has no `--ignore-scripts`, so the closest thing is refusing to build from
+source: a wheel installs declaratively, while an sdist runs the package's own
+`setup.py` with full privileges.
+
+**This has a real cost, and it is worth stating plainly.** A native module
+(`better-sqlite3`, `sharp`) genuinely needs its build step, so an install with
+scripts disabled produces a package that is installed *and broken*. The next run
+fails too -- but by then the log says the repair worked.
+
+So repair refuses up front, and names the package. The lockfile records
+`hasInstallScript` per package, so this is precise rather than a blanket refusal
+of every project that happens to depend on a native module:
+
+```
+refused to repair dependencies automatically: this project has 1 package(s)
+that run install scripts (node_modules/better-sqlite3). Autonomous repair runs
+installs with lifecycle scripts disabled, so the package would be installed and
+still broken. Run the install yourself, where you can see what runs.
+```
+
+That is the honest shape of this fix. Not "we made it safe", but "we made it safe,
+here is what it costs, and here is where we stop and ask".
+
+**Still not done:** no container. Docker and WSL are both available on this host,
+so a container-backed install with no network and a read-only mount is achievable
+-- but that is a different kind of change to this codebase, and a half-built one
+would be worse than the honest refusal above. Script suppression means the
+dangerous code does not execute, which for this threat is stronger than
+isolation rather than a weaker substitute for it.
+
 ## Taking the file's name from the error, not from the model
 
 The model cannot see the file tree, so it answers with a bare basename:

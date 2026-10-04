@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeRunnable, runCapture } from '../core/exec.mjs';
-import { isDeclared, lockfileKind, repairArgv } from './deps.mjs';
+import { isDeclared, lockfileKind, repairArgv, installScriptsIn, NO_SCRIPTS } from './deps.mjs';
 import { isRefused, describeRefusal } from './guard.mjs';
 import { containedPath, openContained, readFd, writeFd, safeClose } from './containment.mjs';
 import { log } from '../core/log.mjs';
@@ -230,6 +230,32 @@ export class Applier {
     }
 
     const label = argv.join(' ');
+
+    // An install whose scripts are disabled will "succeed" and leave a native
+    // module installed but unusable. That is worse than refusing, because the
+    // next run still fails and now the log says the repair worked. So the refusal
+    // happens first and names the package.
+    if (action.kind === 'repair-deps') {
+      const scripted = installScriptsIn(root);
+      if (scripted.length) {
+        const result = {
+          status: 'refused',
+          why:
+            'refused to repair dependencies automatically: this project has ' +
+            `${scripted.length} package(s) that run install scripts ` +
+            `(${scripted.slice(0, 3).map((s) => s.name).join(', ')}${scripted.length > 3 ? ', ...' : ''}). ` +
+            'Autonomous repair runs installs with lifecycle scripts disabled, so the package would be ' +
+            'installed and still broken. Run the install yourself, where you can see what runs.',
+        };
+        this.#recordCommand(argv, ctx, action, {
+          outcome: 'refused',
+          why: result.why,
+          detail: scripted.map((s) => `${s.name}: ${s.why}`).join('\n'),
+        });
+        return result;
+      }
+    }
+
     const timeoutMs = action.timeoutMs ?? 300_000;
     const { cmd, args } = makeRunnable(argv);
     const raw = await runCapture({ cmd, args, cwd: ctx.cwd ?? this.projectRoot, timeoutMs });
@@ -457,12 +483,12 @@ export function installArgv(pkg, root, ecosystem) {
   if (!isDeclared(root, pkg, "node")) return []; // the allowlist gate; caller explains
 
   const lock = lockfileKind(root);
-  if (lock === "pnpm") return ["pnpm", "install", "--frozen-lockfile"];
-  if (lock === "yarn") return ["yarn", "install", "--frozen-lockfile"];
-  if (lock === "npm") return existsSync(join(root, "package.json")) ? ["npm", "ci"] : [];
+  if (lock === "pnpm") return ["pnpm", "install", "--frozen-lockfile", ...NO_SCRIPTS.pnpm];
+  if (lock === "yarn") return ["yarn", "install", "--frozen-lockfile", ...NO_SCRIPTS.yarn];
+  if (lock === "npm") return existsSync(join(root, "package.json")) ? ["npm", "ci", ...NO_SCRIPTS.npm] : [];
 
   // No lockfile: fall back to the declared package, still allowlisted.
-  if (existsSync(join(root, "package.json"))) return ["npm", "install", pkg];
+  if (existsSync(join(root, "package.json"))) return ["npm", "install", pkg, ...NO_SCRIPTS.npm];
   return [];
 }
 
@@ -478,7 +504,19 @@ function pythonInstallArgv(pkg, root) {
   for (const venv of [".venv", "venv", "env"]) {
     const exe = process.platform === "win32" ? join(venv, "Scripts", "python.exe") : join(venv, "bin", "python");
     if (existsSync(join(root, venv)) && existsSync(join(root, exe))) {
-      return [join(root, exe), "-m", "pip", "install", pkg];
+      // The venv's own interpreter, invoked as a bare name relative to the venv's
+      // bin directory -- not as an absolute path. The command policy refuses
+      // absolute executables on purpose ("run this exact file" is the shape that
+      // turns a vetted program name into "run whatever that file does"), and a
+      // path here was refused until this was fixed.
+      //
+      // `python -m pip` rather than the venv's pip script: the same interpreter,
+      // the same environment, and it does not depend on a `pip.exe` shim existing.
+      //
+      // `--only-binary=:all:` because pip has no `--ignore-scripts`. A wheel
+      // installs declaratively; an sdist runs the package's own setup.py with the
+      // user's privileges, which is the thing being refused.
+      return ["python", "-m", "pip", "install", pkg, ...NO_SCRIPTS.python];
     }
   }
   return [];
