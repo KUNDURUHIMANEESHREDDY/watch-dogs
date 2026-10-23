@@ -219,7 +219,9 @@ function renderGraph() {
   svg.classList.remove('hidden');
   const width = Math.max(500, $('graph-stage').clientWidth || 700);
   const height = Math.max(300, $('graph-stage').clientHeight || 360);
-  const viewWidth = width / state.graphScale;\n  const viewHeight = height / state.graphScale;\n  svg.setAttribute('viewBox', `${(width-viewWidth)/2} ${(height-viewHeight)/2} ${viewWidth} ${viewHeight}`);
+  const viewWidth = width / state.graphScale;
+  const viewHeight = height / state.graphScale;
+  svg.setAttribute('viewBox', `${(width-viewWidth)/2} ${(height-viewHeight)/2} ${viewWidth} ${viewHeight}`);
   svg.setAttribute('preserveAspectRatio','xMidYMid meet');
   const positions = new Map();
   const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
