@@ -35,6 +35,10 @@ const navItems: { label: View; icon: typeof LayoutDashboard }[] = [
   { label: 'Activity history', icon: FileClock },
 ];
 
+export function isPairRequiredError(error: unknown): boolean {
+  return error instanceof Error && error.message === 'PAIR_REQUIRED';
+}
+
 export async function readSnapshot(): Promise<Snapshot> {
   const response = await fetch('/api/snapshot', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
   if (response.status === 401) throw new Error('PAIR_REQUIRED');
@@ -63,8 +67,19 @@ export default function App() {
     queryFn: readSnapshot,
     enabled: paired,
     refetchInterval: 4_000,
+    // Authentication failures need a new pairing code, not three retries.
+    // Transient gateway errors still get a small bounded retry budget.
+    retry: (failureCount, error) => !isPairRequiredError(error) && failureCount < 2,
   });
   const snapshot = snapshotQuery.data;
+
+  useEffect(() => {
+    if (!paired || !snapshotQuery.isError || !isPairRequiredError(snapshotQuery.error)) return;
+    setPairCode('');
+    setPairError('Your local session expired. Enter the current one-time pairing code to reconnect.');
+    setPaired(false);
+    queryClient.removeQueries({ queryKey: ['snapshot'] });
+  }, [paired, snapshotQuery.isError, snapshotQuery.error, queryClient]);
   const findings = useMemo(() => (snapshot?.findings ?? []).filter((finding) => {
     const text = [finding.title, finding.ruleId, finding.evidence, finding.shell, finding.cwd].join(' ').toLowerCase();
     return text.includes(query.toLowerCase());
