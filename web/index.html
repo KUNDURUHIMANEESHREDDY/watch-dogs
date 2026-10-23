@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f7f8f6">
+  <title>Watch Dogs — System Monitor</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="pair-screen" class="pair-screen">
+    <section class="pair-card" aria-labelledby="pair-title">
+      <div class="brand-lockup"><span class="brand-mark">W</span><div><strong>WATCH DOGS</strong><small>LOCAL SYSTEM CONTROL</small></div></div>
+      <p class="eyebrow">PRIVATE LOCAL SESSION</p>
+      <h1 id="pair-title">Connect your agent.</h1>
+      <p class="muted">Enter the one-time pairing code printed by the terminal that started the local gateway.</p>
+      <form id="pair-form">
+        <label for="pair-code">One-time pairing code</label>
+        <input id="pair-code" name="pair-code" type="password" autocomplete="off" spellcheck="false" required placeholder="Paste code from terminal">
+        <button class="button primary" type="submit">Connect securely <span aria-hidden="true">↗</span></button>
+        <p id="pair-error" class="error" role="status" aria-live="polite"></p>
+      </form>
+      <div class="security-note"><span class="status-dot good"></span><span>Loopback only · This gateway is not exposed to your network.</span></div>
+    </section>
+  </div>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="rail" aria-label="Primary navigation">
+      <button class="rail-brand" type="button" aria-label="Watch Dogs monitor" data-view="monitor"><span class="brand-mark">W</span></button>
+      <div class="rail-divider"></div>
+      <nav class="rail-nav" id="nav">
+        <button class="rail-item active" data-view="monitor" aria-label="Monitor" title="Monitor"><span class="nav-glyph">◉</span><span class="rail-tooltip">Monitor</span></button>
+        <button class="rail-item" data-view="graph" aria-label="System graph" title="System graph"><span class="nav-glyph">⌘</span><span class="rail-tooltip">System graph</span></button>
+        <button class="rail-item" data-view="incidents" aria-label="Incidents" title="Incidents"><span class="nav-glyph">△</span><span class="rail-tooltip">Incidents</span></button>
+        <button class="rail-item" data-view="repairs" aria-label="Repair review" title="Repair review"><span class="nav-glyph">↗</span><span class="rail-tooltip">Repair review</span></button>
+        <button class="rail-item" data-view="verification" aria-label="Verification" title="Verification"><span class="nav-glyph">✓</span><span class="rail-tooltip">Verification</span></button>
+        <button class="rail-item" data-view="history" aria-label="Activity history" title="Activity history"><span class="nav-glyph">≋</span><span class="rail-tooltip">Activity history</span></button>
+      </nav>
+      <div class="rail-spacer"></div>
+      <button id="settings-button" class="rail-item" aria-label="Agent details" title="Agent details"><span class="nav-glyph">⚙</span><span class="rail-tooltip">Agent details</span></button>
+      <button id="logout" class="rail-item" aria-label="Disconnect" title="Disconnect"><span class="nav-glyph">⇥</span><span class="rail-tooltip">Disconnect</span></button>
+      <div class="rail-foot">WD / LOCAL</div>
+    </aside>
+
+    <main class="main-shell">
+      <header class="command-bar">
+        <div class="crumb"><span>WATCH DOGS</span><span class="crumb-slash">/</span><strong id="view-name">Monitor</strong></div>
+        <div class="command-search"><span aria-hidden="true">⌕</span><input id="global-search" type="search" aria-label="Search resources and logs" placeholder="Search resources, logs, incidents…"><kbd>Ctrl K</kbd></div>
+        <div class="command-actions">
+          <span class="local-chip"><i></i> LOCAL</span>
+          <button id="refresh" class="icon-button" title="Refresh snapshot" aria-label="Refresh snapshot">↻</button>
+          <button id="toggle-activity" class="icon-button activity-toggle" title="Toggle activity tray" aria-label="Toggle activity tray">≋</button>
+        </div>
+      </header>
+
+      <section class="workspace-heading">
+        <div class="heading-copy">
+          <p class="eyebrow">SYSTEM OBSERVABILITY / WINDOWS</p>
+          <h1 id="page-title">System monitor<span class="title-period">.</span></h1>
+          <p id="page-subtitle" class="muted">A live view of what the local watchdog can actually observe.</p>
+        </div>
+        <div class="connection-summary">
+          <span id="connection-pill" class="state-pill state-pending"><i></i><span id="connection-label">Connecting</span></span>
+          <span id="freshness-label" class="freshness">Waiting for first snapshot</span>
+        </div>
+      </section>
+
+      <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
+
+      <section id="monitoring-summary" class="summary-strip" aria-label="Monitoring summary">
+        <article class="summary-cell"><span class="summary-label">WATCHDOG STATE</span><strong id="metric-daemon">—</strong><small id="metric-daemon-note">Awaiting heartbeat</small></article>
+        <article class="summary-cell"><span class="summary-label">LAST HEARTBEAT</span><strong id="metric-heartbeat">—</strong><small id="metric-heartbeat-note">No timestamp yet</small></article>
+        <article class="summary-cell"><span class="summary-label">AUTONOMY MODE</span><strong id="metric-mode">—</strong><small>Runtime configuration</small></article>
+        <article class="summary-cell"><span class="summary-label">AGENT PROCESS</span><strong id="metric-pid">—</strong><small id="metric-runtime">Gateway process</small></article>
+      </section>
+
+      <section class="workspace" id="workspace">
+        <section class="graph-panel" aria-label="System graph workspace">
+          <div class="panel-toolbar">
+            <div class="panel-title-group"><span class="section-kicker">WORKSPACE / 01</span><h2 id="primary-title">System graph</h2></div>
+            <div class="graph-controls">
+              <label class="filter-control"><span class="sr-only">Resource type filter</span><select id="type-filter" aria-label="Filter resource type"><option value="all">All resources</option><option value="process">Processes</option><option value="service">Services</option><option value="file">Files</option><option value="session">Sessions</option></select></label>
+              <button id="fit-graph" class="subtle-button" type="button">Fit view</button>
+            </div>
+          </div>
+          <div id="graph-stage" class="graph-stage">
+            <svg id="graph-svg" class="graph-svg hidden" role="img" aria-label="Observed resource dependency graph"></svg>
+            <div id="graph-empty" class="graph-empty">
+              <div class="empty-orbit" aria-hidden="true"><span class="orbit-node node-a"></span><span class="orbit-node node-b"></span><span class="orbit-node node-c"></span><span class="orbit-core">W</span><span class="orbit-line line-a"></span><span class="orbit-line line-b"></span><span class="orbit-line line-c"></span></div>
+              <p class="eyebrow">RESOURCE GRAPH</p>
+              <h3 id="graph-empty-title">Waiting for observed resources</h3>
+              <p id="graph-empty-copy">The local gateway does not expose resource relationships yet. The graph will populate only from real runtime data—no synthetic topology.</p>
+              <span class="capability-tag"><i></i> GRAPH BRIDGE NOT CONNECTED</span>
+            </div>
+            <div id="graph-legend" class="graph-legend hidden"><span><i class="legend-dot healthy"></i>Healthy</span><span><i class="legend-dot warning"></i>Warning</span><span><i class="legend-dot critical"></i>Critical</span></div>
+            <div class="graph-zoom-controls"><button id="zoom-in" type="button" aria-label="Zoom in">+</button><button id="zoom-out" type="button" aria-label="Zoom out">−</button></div>
+          </div>
+          <div class="graph-footer"><span id="graph-count">0 observed resources</span><span id="graph-source">Waiting for gateway snapshot</span></div>
+        </section>
+
+        <aside id="inspector" class="inspector-panel" aria-label="Selected resource inspector">
+          <div class="inspector-header"><div><span class="section-kicker">CONTEXT / 02</span><h2>Inspector</h2></div><button id="close-inspector" class="icon-button small-icon" type="button" aria-label="Collapse inspector">⇥</button></div>
+          <div id="inspector-content" class="inspector-content">
+            <div class="inspector-empty"><div class="inspector-icon">◎</div><h3>No resource selected</h3><p>Select an observed graph node to inspect its status, relationships, and event history.</p></div>
+          </div>
+          <div class="inspector-bottom"><span class="muted-label">SOURCE OF TRUTH</span><span>Local agent snapshot</span></div>
+        </aside>
+      </section>
+
+      <section id="detail-view" class="detail-view hidden" aria-live="polite"></section>
+
+      <section id="activity-tray" class="activity-tray" aria-label="Runtime activity">
+        <div class="tray-header">
+          <div class="tray-title"><span class="terminal-glyph">›_</span><div><strong>Activity</strong><small id="activity-subtitle">Local daemon output · newest last</small></div></div>
+          <div class="tray-actions"><span id="activity-count" class="activity-count">0 lines</span><button id="clear-filter" class="subtle-button" type="button">Clear filter</button><button id="collapse-activity" class="icon-button small-icon" type="button" aria-label="Collapse activity tray">⌄</button></div>
+        </div>
+        <div class="activity-filter-row"><label class="activity-search"><span aria-hidden="true">⌕</span><input id="activity-search" type="search" placeholder="Filter local output…" aria-label="Filter local output"></label><span class="activity-source"><i></i> DAEMON LOG</span></div>
+        <div id="activity-list" class="activity-list" aria-live="polite"><div class="activity-empty">Waiting for an authenticated local snapshot…</div></div>
+      </section>
+
+      <footer class="app-footer"><span>WATCH DOGS <b>·</b> LOCAL CONTROL PLANE</span><span id="footer-state">NO SESSION</span><span id="footer-version">PROTOCOL v1</span></footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -11,8 +11,12 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "test": "node --test \"test/*.test.mjs\"",
+    "test": "node --test test/*.test.mjs",
     "wd": "node bin/wd.js",
+    "wd:web": "node src/agent/web-gateway.mjs",
+    "web:dev": "npm --prefix frontend run dev",
+    "web:build": "npm --prefix frontend run build",
+    "web:preview": "npm --prefix frontend run preview",
     "sandbox": "node sandbox/run-sandbox.mjs",
     "sandbox:live": "node sandbox/run-sandbox.mjs",
     "daemon-test": "node sandbox/run-daemon-test.mjs",
