@@ -101,7 +101,7 @@ function readFindings(limit = 200) {
       shell: record.shell || null,
       cwd: record.cwd || null,
       sessionId: record.sessionId || null,
-      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null } : null,
+      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null, verification: record.advisor.verification ? { verdict: record.advisor.verification.verdict || 'unknown', evidence: record.advisor.verification.evidence || 'unknown', why: typeof record.advisor.verification.why === 'string' ? record.advisor.verification.why.slice(0, 240) : null } : null } : null,
       applied: record.applied ? { status: record.applied.status || 'unknown', summary: typeof record.applied.summary === 'string' ? record.applied.summary.slice(0, 240) : null } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
       suppressed: record.suppressed || null
@@ -153,6 +153,7 @@ function snapshot() {
   let dataFiles = [];
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
   const findings = readFindings();
+  const verifications = findings.filter(record => record.advisor?.verification).map(record => ({ id: record.id, title: record.title, status: record.advisor.verification.evidence || record.advisor.verification.verdict, verdict: record.advisor.verification.verdict, evidence: record.advisor.verification.why || record.advisor.verification.evidence, at: record.at }));
   const journal = readJournal();
   return {
     protocol: 'watchdogs.local.v1',
@@ -170,6 +171,7 @@ function snapshot() {
     },
     logs,
     findings,
+    verifications,
     journal,
     capabilities: {
       health: true, snapshot: true, eventStream: true,
