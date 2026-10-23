@@ -35,7 +35,7 @@ const navItems: { label: View; icon: typeof LayoutDashboard }[] = [
   { label: 'Activity history', icon: FileClock },
 ];
 
-async function readSnapshot(): Promise<Snapshot> {
+export async function readSnapshot(): Promise<Snapshot> {
   const response = await fetch('/api/snapshot', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
   if (response.status === 401) throw new Error('PAIR_REQUIRED');
   if (!response.ok) throw new Error(`Gateway returned HTTP ${response.status}`);
