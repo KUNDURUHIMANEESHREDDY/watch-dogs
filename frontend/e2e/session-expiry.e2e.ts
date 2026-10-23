@@ -73,6 +73,7 @@ test('announces pairing progress while the gateway request is pending', async ({
   const connectButton = page.getByRole('button', { name: /Connect securely/ });
   await connectButton.click();
 
+  await expect(page.getByRole('status')).toHaveCount(1);
   await expect(page.getByRole('status')).toHaveText('Connecting to the local gateway…');
   await expect(connectButton).toBeDisabled();
 
