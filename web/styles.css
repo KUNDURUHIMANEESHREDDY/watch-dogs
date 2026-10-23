@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
 :root{font-family:Manrope,"Segoe UI",sans-serif;color:#202722;background:#f7f8f6;font-synthesis:none;text-rendering:optimizeLegibility;--bg:#f7f8f6;--surface:#fff;--surface-2:#f2f4f1;--surface-3:#e9ede8;--line:#e1e6df;--line-strong:#cfd7ce;--ink:#202722;--muted:#758078;--muted-2:#9aa39b;--green:#287b4b;--green-strong:#1d633a;--green-soft:#e8f4eb;--red:#b8443f;--red-soft:#fff0ef;--amber:#a96c16;--amber-soft:#fff6e5;--shadow:0 10px 30px #1c2a1e08;--mono:"DM Mono",Consolas,monospace}
 *{box-sizing:border-box}
 html{min-height:100%;background:var(--bg)}
