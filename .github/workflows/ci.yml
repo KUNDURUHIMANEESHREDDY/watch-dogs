@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: Core tests and sandbox verification
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked root dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run unit and safety regression tests
+        run: npm test
+
+      - name: Run product sandbox verification
+        run: npm run sandbox
+
+  frontend-build:
+    name: Frontend typecheck and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The frontend currently has no committed package-lock.json. Keep this
+      # visible as a follow-up: npm install verifies the build but does not yet
+      # make frontend dependency resolution reproducible across runs.
+      - name: Install frontend dependencies
+        run: npm install --prefix frontend --no-audit --no-fund
+
+      - name: Build frontend
+        run: npm run web:build
