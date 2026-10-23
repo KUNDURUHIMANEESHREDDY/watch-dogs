@@ -21,6 +21,7 @@ test('the shell uses local assets and exposes accessible connection pairing', ()
 
 test('runtime contract names the protocol and explicit optional bridges', () => {
   assert.match(contractSource, /WatchDogsProtocol = 'watchdogs\.local\.v1'/);
+  assert.match(contractSource, /findingsSnapshot: boolean/);
   assert.match(contractSource, /liveFindingEvents: boolean/);
   assert.match(contractSource, /repairExecution: boolean/);
   assert.match(contractSource, /resources\?: ObservedResource\[\]/);
@@ -32,4 +33,9 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(appSource, /Approval and execution controls remain disabled/);
   assert.match(appSource, /The UI will display findings only after the runtime exposes/);
   assert.match(appSource, /STALE/);
+  const gatewaySource = await readFile(new URL('../src/agent/web-gateway.mjs', import.meta.url), 'utf8');
+  assert.doesNotThrow(() => new vm.Script(gatewaySource, { filename: 'src/agent/web-gateway.mjs' }));
+  assert.match(gatewaySource, /findings\.jsonl/);
+  assert.match(gatewaySource, /findingsSnapshot: true/);
+  assert.match(gatewaySource, /repairExecution: false/);
 });
