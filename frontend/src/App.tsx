@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import type { FormEvent } from 'react';
 import {
   Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, ChevronDown,
   CircleHelp, Clock3, Command, Cpu, FileClock, GitBranch, LayoutDashboard, ListFilter,
@@ -16,7 +17,7 @@ type Finding = {
   applied?: { status?: string; summary?: string | null } | null;
 };
 type Snapshot = {
-  heartbeat?: Record<string, unknown> | null;
+  watchdog?: { state?: string; detail?: string; lastBeat?: string | null; daemonPid?: number | null } | null;
   findings?: Finding[];
   findingsSnapshot?: boolean;
   journal?: Array<{ id: string; at?: string | null; outcome?: string; type?: string; target?: string | null; reason?: string | null }>;
@@ -55,6 +56,7 @@ export default function App() {
   const [pairError, setPairError] = useState('');
   const [paired, setPaired] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
+  const queryClient = useQueryClient();
 
   const snapshotQuery = useQuery({
     queryKey: ['snapshot'],
@@ -82,7 +84,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  async function connect(event: React.FormEvent<HTMLFormElement>) {
+  async function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPairError('');
     try {
@@ -90,7 +92,7 @@ export default function App() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ code: pairCode }),
+        body: JSON.stringify({ pairingCode: pairCode }),
       });
       if (!response.ok) throw new Error('Pairing code was rejected. Copy the current code from the gateway terminal.');
       setPaired(true);
@@ -104,12 +106,12 @@ export default function App() {
     try { await fetch('/api/session/logout', { method: 'POST', credentials: 'same-origin' }); } finally {
       setPaired(false);
       setSelected(null);
-      snapshotQuery.remove();
+      queryClient.removeQueries({ queryKey: ['snapshot'] });
     }
   }
 
   const graphNodes: Node[] = useMemo(() => {
-    const hb = snapshot?.heartbeat;
+    const hb = snapshot?.watchdog;
     const nodes: Node[] = [{
       id: 'agent', position: { x: 280, y: 190 }, type: 'default',
       data: { label: 'Watch Dogs agent' }, className: 'graph-node graph-node-agent',
@@ -125,11 +127,11 @@ export default function App() {
       style: { width: 170 },
     }));
     return nodes;
-  }, [snapshot?.heartbeat, findings]);
+  }, [snapshot?.watchdog, findings]);
   const graphEdges: Edge[] = useMemo(() => [
-    ...(snapshot?.heartbeat ? [{ id: 'heartbeat-agent', source: 'heartbeat', target: 'agent', animated: true }] : []),
+    ...(snapshot?.watchdog ? [{ id: 'heartbeat-agent', source: 'heartbeat', target: 'agent', animated: true }] : []),
     ...findings.slice(0, 5).map((finding) => ({ id: `agent-${finding.id}`, source: 'agent', target: finding.id })),
-  ], [snapshot?.heartbeat, findings]);
+  ], [snapshot?.watchdog, findings]);
 
   if (!paired) return (
     <main className="pair-screen">
@@ -186,7 +188,7 @@ export default function App() {
           <section className="graph-panel">
             <div className="panel-heading"><div><b>Observed system topology</b><p>Only nodes derived from the current snapshot are shown.</p></div><span className="subtle-chip"><GitBranch size={13} /> {graphNodes.length} nodes</span></div>
             <div className="graph-canvas"><ReactFlow nodes={graphNodes} edges={graphEdges} fitView fitViewOptions={{ padding: 0.25 }} nodesDraggable nodesConnectable={false} proOptions={{ hideAttribution: true }}><Background color="#e5e9ef" gap={22} /><Controls /><MiniMap pannable zoomable /></ReactFlow></div>
-            {!snapshot?.heartbeat && findings.length === 0 && <div className="empty-overlay"><Network size={22} /><b>No topology data yet</b><span>Graph elements appear when the gateway returns observed data.</span></div>}
+            {!snapshot?.watchdog && findings.length === 0 && <div className="empty-overlay"><Network size={22} /><b>No topology data yet</b><span>Graph elements appear when the gateway returns observed data.</span></div>}
           </section>
         ) : (
           <section className="content-grid">
