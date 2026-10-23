@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { extname, join, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
@@ -123,7 +123,7 @@ function readJournal(limit = 100) {
       let target = null;
       if (typeof entry.abs === 'string') {
         const rel = relative(cfg.projectRoot, resolve(entry.abs));
-        target = rel === '..' || rel.startsWith('..' + sep) || resolve(rel) === sep
+        target = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
           ? '[outside project]'
           : rel;
       }
