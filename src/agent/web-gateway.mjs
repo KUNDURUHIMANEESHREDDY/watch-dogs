@@ -101,8 +101,8 @@ function readFindings(limit = 200) {
       shell: record.shell || null,
       cwd: record.cwd || null,
       sessionId: record.sessionId || null,
-      advisor: record.advisor || null,
-      applied: record.applied || null,
+      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null } : null,
+      applied: record.applied ? { status: record.applied.status || 'unknown', summary: typeof record.applied.summary === 'string' ? record.applied.summary.slice(0, 240) : null } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
       suppressed: record.suppressed || null
     }));
