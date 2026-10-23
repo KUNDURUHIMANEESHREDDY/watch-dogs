@@ -165,7 +165,6 @@ export default function App() {
           <input id="pair-code" autoComplete="off" spellCheck={false} type="password" value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="Paste code from terminal" required />
           <button className="button button-primary" type="submit" disabled={isConnecting || !pairCode.trim()} aria-busy={isConnecting}>{isConnecting ? "Connecting…" : "Connect securely"} {!isConnecting && <ArrowUpRight size={16} />}</button>
           {isConnecting && <p className="muted" role="status" aria-live="polite">Connecting to the local gateway…</p>}
-          {isConnecting && <p className="muted" role="status" aria-live="polite">Connecting to the local gateway…</p>}
           {pairError && <p className="error" role="alert">{pairError}</p>}
         </form>
         <div className="security-note"><LockKeyhole size={15} /> Loopback only <span className="bullet">·</span> Local gateway session</div>
