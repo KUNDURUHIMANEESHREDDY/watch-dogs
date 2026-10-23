@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const appSource = await readFile(new URL('../web/app.js', import.meta.url), 'utf8');
 const htmlSource = await readFile(new URL('../web/index.html', import.meta.url), 'utf8');
@@ -35,10 +37,13 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(appSource, /The UI will display findings only when the local watchdog has recorded real finding records/);
   assert.match(appSource, /STALE/);
   const gatewaySource = await readFile(new URL('../src/agent/web-gateway.mjs', import.meta.url), 'utf8');
-  assert.doesNotThrow(() => new vm.Script(gatewaySource, { filename: 'src/agent/web-gateway.mjs' }));
+  const gatewayPath = fileURLToPath(new URL('../src/agent/web-gateway.mjs', import.meta.url));
+  const syntaxCheck = spawnSync(process.execPath, ['--check', gatewayPath], { encoding: 'utf8' });
+  assert.equal(syntaxCheck.status, 0, syntaxCheck.stderr || 'gateway syntax check failed');
   assert.match(gatewaySource, /findings\.jsonl/);
   assert.match(gatewaySource, /findingsSnapshot: true/);
   assert.match(gatewaySource, /journalSnapshot: true/);
   assert.match(gatewaySource, /function readJournal/);
+  assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /repairExecution: false/);
 });
