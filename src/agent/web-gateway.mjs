@@ -60,6 +60,53 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
+function readFindings(limit = 200) {
+  const base = join(cfg.paths.data, 'findings.jsonl');
+  const records = [];
+  for (const path of [base + '.1', base]) {
+    try {
+      if (!existsSync(path)) continue;
+      const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        try {
+          const record = JSON.parse(line);
+          if (record && typeof record === 'object' && record.ruleId && record.evidence) records.push(record);
+        } catch {
+          // A partial final line is ignored; the next snapshot can read the next complete record.
+        }
+      }
+    } catch {
+      // Read-only observability must not prevent the health snapshot from working.
+    }
+  }
+  // The watcher may persist the same signature more than once as advisor/applier
+  // state changes. Keep the latest record for each signature rather than showing
+  // duplicate incidents for each lifecycle update.
+  const latest = new Map();
+  for (const record of records) {
+    const key = record.signature || `${record.ruleId}::${record.sessionId || ''}::${record.evidence}`;
+    latest.set(key, record);
+  }
+  return [...latest.values()]
+    .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
+    .slice(-limit)
+    .map(record => ({
+      id: String(record.signature || `${record.ruleId}::${record.at || ''}`),
+      ruleId: record.ruleId,
+      title: record.title || record.ruleId,
+      severity: record.severity || 'unknown',
+      confidence: record.confidence || 'unknown',
+      evidence: record.evidence,
+      at: record.at || null,
+      shell: record.shell || null,
+      cwd: record.cwd || null,
+      sessionId: record.sessionId || null,
+      advisor: record.advisor || null,
+      applied: record.applied || null,
+      requiresHuman: Boolean(record.advisor?.requiresHuman),
+      suppressed: record.suppressed || null
+    }));
+}
 function snapshot() {
   const heartbeat = readHeartbeat(cfg.paths.data);
   let logs = [];
@@ -69,6 +116,7 @@ function snapshot() {
   } catch {}
   let dataFiles = [];
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
+  const findings = readFindings();
   return {
     protocol: 'watchdogs.local.v1',
     generatedAt: new Date().toISOString(),
@@ -84,11 +132,13 @@ function snapshot() {
       dataFiles
     },
     logs,
+    findings,
     capabilities: {
       health: true, snapshot: true, eventStream: true,
+      findingsSnapshot: true,
       liveFindingEvents: false,
       repairExecution: false,
-      note: 'The gateway currently exposes real health/heartbeat/log data. Live finding events and repair execution require an explicit in-process runtime bridge and are not simulated.'
+      note: 'The gateway exposes real health, heartbeat, daemon logs, and persisted findings. Live finding events and repair execution are not wired and are not simulated.'
     }
   };
 }
