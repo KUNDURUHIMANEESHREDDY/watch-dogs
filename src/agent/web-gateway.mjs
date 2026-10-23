@@ -5,6 +5,7 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
+import { parseCookies } from './cookies.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -25,10 +26,6 @@ const safeEqual = (a, b) => {
   const bb = Buffer.from(String(b));
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 };
-const parseCookies = (header = '') => Object.fromEntries(header.split(';').map(x => x.trim()).filter(Boolean).map(x => {
-  const i = x.indexOf('=');
-  return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
-}));
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
     let raw = '';
