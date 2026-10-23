@@ -80,7 +80,7 @@ export interface FindingRecord {
   sessionId?: string | null;
   requiresHuman?: boolean;
   suppressed?: string | null;
-  advisor?: { pending?: boolean; verdict?: string | null; requiresHuman?: boolean; why?: string | null } | null;
+  advisor?: { pending?: boolean; verdict?: string | null; requiresHuman?: boolean; why?: string | null; verification?: { verdict: string; evidence: string; why?: string | null } | null } | null;
   applied?: { status?: string; summary?: string | null } | null;
 }
 
