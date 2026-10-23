@@ -58,6 +58,7 @@ export default function App() {
   const [selected, setSelected] = useState<Finding | null>(null);
   const [pairCode, setPairCode] = useState('');
   const [pairError, setPairError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
   const [paired, setPaired] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const queryClient = useQueryClient();
@@ -101,19 +102,23 @@ export default function App() {
 
   async function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isConnecting) return;
+    setIsConnecting(true);
     setPairError('');
     try {
       const response = await fetch('/api/session', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ pairingCode: pairCode }),
+        body: JSON.stringify({ pairingCode: pairCode.trim() }),
       });
       if (!response.ok) throw new Error('Pairing code was rejected. Copy the current code from the gateway terminal.');
       setPaired(true);
       setPairCode('');
     } catch (error) {
       setPairError(error instanceof Error ? error.message : 'Unable to connect to the local gateway.');
+    } finally {
+      setIsConnecting(false);
     }
   }
 
@@ -158,7 +163,7 @@ export default function App() {
         <form className="pair-form" onSubmit={connect}>
           <label htmlFor="pair-code">One-time pairing code</label>
           <input id="pair-code" autoComplete="off" spellCheck={false} type="password" value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="Paste code from terminal" required />
-          <button className="button button-primary" type="submit">Connect securely <ArrowUpRight size={16} /></button>
+          <button className="button button-primary" type="submit" disabled={isConnecting || !pairCode.trim()} aria-busy={isConnecting}>{isConnecting ? "Connecting…" : "Connect securely"} {!isConnecting && <ArrowUpRight size={16} />}</button>
           {pairError && <p className="error" role="alert">{pairError}</p>}
         </form>
         <div className="security-note"><LockKeyhole size={15} /> Loopback only <span className="bullet">·</span> Local gateway session</div>
