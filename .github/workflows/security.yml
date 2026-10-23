@@ -1,0 +1,105 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    name: Dependency advisory audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [".", "frontend"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: ${{ matrix.directory }}
+
+      - name: Audit high and critical advisories
+        run: npm audit --audit-level=high
+        working-directory: ${{ matrix.directory }}
+
+  secret-scan:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan Git history with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sbom:
+    name: Generate dependency SBOMs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install locked root dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install locked frontend dependencies
+        run: npm ci --prefix frontend --no-audit --no-fund
+
+      - name: Generate root SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --output-file sbom-root.json
+
+      - name: Generate frontend SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --output-file sbom-frontend.json
+        working-directory: frontend
+
+      - name: Upload SBOM evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-sboms
+          path: |
+            sbom-root.json
+            frontend/sbom-frontend.json
+          if-no-files-found: error
+          retention-days: 30
