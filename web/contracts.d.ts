@@ -98,11 +98,24 @@ export interface VerificationRecord {
   completedAt?: string;
 }
 
+export interface JournalSummary {
+  id: string;
+  at: string | null;
+  outcome: string;
+  type: string;
+  /** Project-relative path only; external targets are redacted. */
+  target: string | null;
+  source: string | null;
+  txOutcome: string | null;
+  reason: string | null;
+}
+
 export interface GatewayCapabilities {
   health: boolean;
   snapshot: boolean;
   eventStream: boolean;
   findingsSnapshot: boolean;
+  journalSnapshot: boolean;
   liveFindingEvents: boolean;
   repairExecution: boolean;
   note?: string;
@@ -121,6 +134,8 @@ export interface WatchDogsSnapshot {
   relationships?: ResourceRelationship[];
   /** Optional until a real finding bridge is connected. */
   findings?: FindingRecord[];
+  /** Sanitized audit summaries; never includes before-images or raw argv. */
+  journal?: JournalSummary[];
   /** Optional until guarded proposal retrieval is connected. */
   repairProposals?: RepairProposal[];
   /** Optional until actual verification results are exposed. */
