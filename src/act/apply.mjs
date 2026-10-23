@@ -1070,7 +1070,11 @@ recoverPending() {
 
     // Same file-class policy. Rolling a "change" to a credential file or a git
     // hook is still a write to a credential file.
-    // Use the normalized in-project path for the policy check.     // `containedPath` has already verified its real target; passing the canonical     // realpath back through a second path comparison can misclassify a valid     // rollback target on Windows when the filesystem canonicalizes path spelling.     const verdict = isRefused({ kind: 'patch-file', path: check.abs }, { projectRoot: this.projectRoot, source: 'llm' });
+    // Use the normalized in-project path for the policy check. containedPath()
+    // has already verified its real target; isRefused() repeats the realpath
+    // containment check while avoiding a second comparison against a
+    // filesystem-canonical path spelling.
+    const verdict = isRefused({ kind: 'patch-file', path: check.abs }, { projectRoot: this.projectRoot, source: 'llm' });
     if (!verdict.ok) {
       return { error: `journal entry targets a protected file: ${verdict.why}` };
     }
