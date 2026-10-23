@@ -40,6 +40,31 @@ jobs:
       - name: Run product sandbox verification
         run: npm run sandbox
 
+  frontend-lockfile-bootstrap:
+    name: Generate frontend lockfile candidate (temporary)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Generate candidate lockfile without running package scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        working-directory: frontend
+      - name: Upload candidate for review and commit
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-lockfile-candidate
+          path: frontend/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
+
   frontend-build:
     name: Frontend typecheck and production build
     runs-on: ubuntu-latest
@@ -52,8 +77,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
 
       - name: Require committed frontend lockfile
         shell: bash
