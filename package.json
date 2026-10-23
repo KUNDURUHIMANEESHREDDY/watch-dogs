@@ -14,6 +14,9 @@
     "test": "node --test \"test/*.test.mjs\"",
     "wd": "node bin/wd.js",
     "wd:web": "node src/agent/web-gateway.mjs",
+    "web:dev": "vite --config frontend/vite.config.ts",
+    "web:build": "tsc -b frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
+    "web:preview": "vite preview --config frontend/vite.config.ts",
     "sandbox": "node sandbox/run-sandbox.mjs",
     "sandbox:live": "node sandbox/run-sandbox.mjs",
     "daemon-test": "node sandbox/run-daemon-test.mjs",
@@ -26,6 +29,24 @@
     "@langfuse/otel": "^5.11.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.222.0",
-    "@opentelemetry/sdk-trace-base": "^2.11.0"
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@xyflow/react": "^12.8.6",
+    "@tanstack/react-query": "^5.90.5",
+    "lucide-react": "^0.468.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.16",
+    "@types/node": "^22.18.12",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "tailwindcss": "^4.1.16",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4",
+    "@playwright/test": "^1.56.1"
   }
 }
