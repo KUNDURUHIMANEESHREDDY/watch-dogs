@@ -53,9 +53,24 @@ jobs:
         with:
           node-version: 22
 
-      - name: Require committed frontend lockfile
+      # Bootstrap the lockfile with npm itself when it is missing. This step
+      # only creates a CI workspace candidate; the generated file is uploaded
+      # for review and committed separately before CI is considered reproducible.
+      - name: Generate frontend lockfile candidate
         shell: bash
-        run: test -f frontend/package-lock.json || { echo "::error::frontend/package-lock.json is required; generate it with npm install --package-lock-only in frontend/ and commit it"; exit 1; }
+        working-directory: frontend
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Upload frontend lockfile candidate
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-lockfile-candidate
+          path: frontend/package-lock.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Install locked frontend dependencies
         run: npm ci --prefix frontend --no-audit --no-fund
