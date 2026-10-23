@@ -59,5 +59,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm install --prefix frontend --no-audit --no-fund
 
+      - name: Run frontend API contract tests
+        run: npm test --prefix frontend
+
       - name: Build frontend
         run: npm run web:build
