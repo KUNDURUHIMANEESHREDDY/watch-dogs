@@ -32,7 +32,7 @@ test('runtime contract names the protocol and explicit optional bridges', () => 
 test('UI does not claim missing finding or repair integrations are operational', () => {
   assert.match(appSource, /No synthetic topology/);
   assert.match(appSource, /Approval and execution controls remain disabled/);
-  assert.match(appSource, /The UI will display findings only after the runtime exposes/);
+  assert.match(appSource, /The UI will display findings only when the local watchdog has recorded real finding records/);
   assert.match(appSource, /STALE/);
   const gatewaySource = await readFile(new URL('../src/agent/web-gateway.mjs', import.meta.url), 'utf8');
   assert.doesNotThrow(() => new vm.Script(gatewaySource, { filename: 'src/agent/web-gateway.mjs' }));
