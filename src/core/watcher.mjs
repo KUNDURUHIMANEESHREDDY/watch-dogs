@@ -466,7 +466,7 @@ export class Watcher extends EventEmitter {
     // three-file fix in which two writes were refused and one succeeded read as a
     // clean success, and it set acted=true before knowing whether any of the
     // writes had actually landed.
-    const counts = aggregate(results);
+    const counts = Watcher.aggregate(results);
     rec.applied = { status: counts.status, files: results };
     rec.advisor.acted = counts.allApplied;
     rec.advisor.why = counts.allApplied ? appliedReason(verdict.evidence) : counts.summary;

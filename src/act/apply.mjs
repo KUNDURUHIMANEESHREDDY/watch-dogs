@@ -1070,7 +1070,9 @@ recoverPending() {
 
     // Same file-class policy. Rolling a "change" to a credential file or a git
     // hook is still a write to a credential file.
-    const verdict = isRefused({ kind: 'patch-file', path: check.real }, { projectRoot: this.projectRoot, source: 'llm' });
+    // Use the normalized in-project path for the policy check. containedPath() has
+    // already validated the target; avoid rechecking a filesystem-canonical spelling.
+    const verdict = isRefused({ kind: 'patch-file', path: check.abs }, { projectRoot: this.projectRoot, source: 'llm' });
     if (!verdict.ok) {
       return { error: `journal entry targets a protected file: ${verdict.why}` };
     }

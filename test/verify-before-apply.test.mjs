@@ -170,6 +170,10 @@ test('a genuinely wrong fix that still parses is caught by the project check', a
   // check running, so this asserts the gate is in the path rather than claiming
   // the gate is sufficient.
   assert.notEqual(r.after, r.before, 'the edit was never even attempted, so the gate is not being exercised');
+  const update = r.events.find((e) => e.kind === 'finding-updated' && e.rec.advisor?.verification);
+  assert.ok(update, 'the verified result was not published after promotion');
+  assert.equal(update.rec.advisor?.acted, true, 'the watcher did not report the applied transaction');
+  assert.equal(update.rec.applied?.status, 'all_applied', 'the applied file results were not aggregated');
 });
 
 /** A project whose verification command is a node script we control. */

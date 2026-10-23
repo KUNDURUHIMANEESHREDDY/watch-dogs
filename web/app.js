@@ -108,7 +108,7 @@ function updateFreshness() {
   const age = Math.max(0, Math.floor((Date.now() - state.lastSuccessAt) / 1000));
   $('freshness-label').textContent = age < 5 ? 'Snapshot just refreshed' : `Snapshot ${age}s ago`;
   if (age > 25) {
-    $('freshness-label').textContent = `STALE · Last snapshot ${age}s ago`;
+    $('freshness-label').textContent = `STALE  -  Last snapshot ${age}s ago`;
     setConnection('disconnected');
   }
 }
@@ -150,7 +150,7 @@ function renderSnapshot() {
   $('metric-heartbeat-note').textContent = ageLabel(watchdog.lastBeat);
   $('metric-mode').textContent = watchdog.autonomy || 'Unknown';
   $('metric-pid').textContent = watchdog.daemonPid ?? 'Not running';
-  $('metric-runtime').textContent = `Gateway PID ${s.agent?.pid ?? '—'} · ${s.agent?.version ?? 'Node'}`;
+  $('metric-runtime').textContent = `Gateway PID ${s.agent?.pid ?? '-'}  -  ${s.agent?.version ?? 'Node'}`;
   $('last-updated')?.remove();
   if (daemonState === 'running' && heartbeatFresh) setConnection('connected');
   else if (daemonState === 'running' || watchdog.lastBeat) setConnection('pending');
@@ -210,8 +210,8 @@ function renderGraph() {
     $('graph-empty-title').textContent = all.length ? 'No resources match these filters' : 'Waiting for observed resources';
     $('graph-empty-copy').textContent = all.length
       ? 'Try another resource type or clear the search. The graph uses only records returned by the local runtime.'
-      : 'The local gateway does not expose resource relationships yet. The graph will populate only from real runtime data—no synthetic topology.';
-    $('graph-count').textContent = all.length ? `0 shown · ${all.length} observed` : '0 observed resources';
+      : 'The local gateway does not expose resource relationships yet. The graph will populate only from real runtime data. No synthetic topology is shown.';
+    $('graph-count').textContent = all.length ? `0 shown  -  ${all.length} observed` : '0 observed resources';
     return;
   }
   $('graph-empty').classList.add('hidden');
@@ -255,14 +255,14 @@ function renderGraph() {
     title.textContent = resourceLabel(node,index).slice(0,18);
     group.append(title);
     const subtitle = svgEl('text',{x:12,y:41,class:'node-subtitle'});
-    subtitle.textContent = `${resourceType(node).toUpperCase()} · ${resourceStatus(node).toUpperCase()}`.slice(0,24);
+    subtitle.textContent = `${resourceType(node).toUpperCase()}  -  ${resourceStatus(node).toUpperCase()}`.slice(0,24);
     group.append(subtitle);
     const select = () => { state.selectedResource = { ...node, id }; state.selectedInspectorTab='overview'; renderInspector(state.selectedResource); renderGraph(); };
     group.addEventListener('click',select);
     group.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select();}});
     svg.append(group);
   });
-  $('graph-count').textContent = `${nodes.length} shown · ${all.length} observed`;
+  $('graph-count').textContent = `${nodes.length} shown  -  ${all.length} observed`;
   $('graph-source').textContent = getEdges(state.snapshot).length ? `${getEdges(state.snapshot).length} reported relationships` : 'No relationships reported';
 }
 function renderInspector(resource) {
@@ -310,21 +310,21 @@ function renderDetail(view) {
   let body = '';
   if (view === 'incidents') {
     body = `<div class="detail-heading"><div><span class="section-kicker">FINDINGS / EVIDENCE</span><h2>Incident queue</h2><p>${findings.length ? 'Findings returned by the runtime snapshot.' : 'No findings are exposed by the current gateway.'}</p></div><span class="detail-state">${findings.length} records</span></div>`;
-    body += findings.length ? `<div class="detail-grid">${findings.map((f,i)=>{const status=f.applied?.status ?? (f.requiresHuman?'Requires human review':f.advisor?.pending?'Advisor pending':f.suppressed?'Suppressed':'Observed');return `<article class="detail-card"><h3>${esc(f.title ?? f.message ?? f.rule ?? `Finding ${i+1}`)}</h3><p>${esc(f.severity ?? 'Severity not reported')} · ${esc(status)}</p><p>${esc(f.evidence ?? f.line ?? f.detail ?? 'No evidence field returned.')}</p><p>${esc([f.shell,f.cwd].filter(Boolean).join(' · ') || 'Source context not reported')}</p><p>${esc(f.at ? formatTime(f.at) : 'Timestamp not reported')}</p></article>`}).join('')}</div>` : emptyCard('No persisted findings',capabilityText,'The UI will display findings only when the local watchdog has recorded real finding records.');
+    body += findings.length ? `<div class="detail-grid">${findings.map((f,i)=>{const status=f.applied?.status ?? (f.requiresHuman?'Requires human review':f.advisor?.pending?'Advisor pending':f.suppressed?'Suppressed':'Observed');return `<article class="detail-card"><h3>${esc(f.title ?? f.message ?? f.rule ?? `Finding ${i+1}`)}</h3><p>${esc(f.severity ?? 'Severity not reported')}  -  ${esc(status)}</p><p>${esc(f.evidence ?? f.line ?? f.detail ?? 'No evidence field returned.')}</p><p>${esc([f.shell,f.cwd] .filter(Boolean).join('  -  ') || 'Source context not reported')}</p><p>${esc(f.at ? formatTime(f.at) : 'Timestamp not reported')}</p></article>`}).join('')}</div>` : emptyCard('No persisted findings',capabilityText,'The UI will display findings only when the local watchdog has recorded real finding records.');
   } else if (view === 'repairs') {
     body = `<div class="detail-heading"><div><span class="section-kicker">GUARDED ACTIONS / REVIEW</span><h2>Repair proposals</h2><p>Every proposed change must be reviewed against the existing safety rails.</p></div><span class="detail-state">${caps.repairExecution ? proposals.length+' proposals' : 'Execution disabled'}</span></div>`;
     body += proposals.length ? `<div class="detail-grid">${proposals.map((p,i)=>`<article class="detail-card"><h3>${esc(p.title ?? p.kind ?? `Proposal ${i+1}`)}</h3><p>${esc(p.reason ?? 'Reason not supplied')}</p><p>Target: ${esc(p.target ?? p.path ?? 'Not reported')}</p><button class="button primary" disabled title="Approval bridge is not implemented">Approve proposal unavailable</button></article>`).join('')}</div>` : emptyCard('No actionable proposals available',capabilityText,'Approval and execution controls remain disabled until the guarded runtime bridge is implemented and tested.');
   } else if (view === 'verification') {
-    body = `<div class="detail-heading"><div><span class="section-kicker">POST-ACTION CHECKS / EVIDENCE</span><h2>Verification records</h2><p>Verification must report what checks actually proved—not assume a repair succeeded.</p></div><span class="detail-state">${verifications.length} records</span></div>`;
+    body = `<div class="detail-heading"><div><span class="section-kicker">POST-ACTION CHECKS / EVIDENCE</span><h2>Verification records</h2><p>Verification must report what checks actually proved-not assume a repair succeeded.</p></div><span class="detail-state">${verifications.length} records</span></div>`;
     body += verifications.length ? `<div class="detail-grid">${verifications.map((v,i)=>`<article class="detail-card"><h3>${esc(v.title ?? v.name ?? `Check ${i+1}`)}</h3><p>Result: ${esc(v.status ?? v.verdict ?? 'Not reported')}</p><p>${esc(v.evidence ?? v.detail ?? 'No evidence returned.')}</p></article>`).join('')}</div>` : emptyCard('Verification data not exposed',capabilityText,'No success state is inferred from approval or from the absence of an error.');
   } else if (view === 'history') {
     body = `<div class="detail-heading"><div><span class="section-kicker">LOCAL EVENT RECORD</span><h2>Activity history</h2><p>Timestamped lines returned by the authenticated local snapshot.</p></div><span class="detail-state">${logs.length} log lines</span></div>`;
     body += logs.length ? `<div class="detail-card history-records">${logs.slice(-100).map(item=>`<div class="activity-line"><span class="activity-time">${esc(item.timestamp ? formatTime(item.timestamp) : 'LOCAL LOG')}</span><span class="activity-text">${esc(item.line ?? '')}</span></div>`).join('')}</div>` : emptyCard('No local log lines', 'The gateway did not return any daemon log lines.','Start the existing watchdog daemon and refresh the snapshot.');
     body += `<div class="detail-heading audit-heading"><div><span class="section-kicker">ACTION AUDIT / SANITIZED</span><h2>Journal entries</h2><p>Recorded action outcomes from the local watchdog. Raw command arguments and before-images are not exposed.</p></div><span class="detail-state">${journal.length} records</span></div>`;
-    body += journal.length ? `<div class="detail-grid">${journal.map(entry=>`<article class="detail-card"><h3>${esc(entry.type)} · ${esc(entry.outcome)}</h3><p>${esc(entry.at ? formatTime(entry.at) : 'Time not recorded')}</p><p>Target: ${esc(entry.target || 'Not reported')}</p><p>${esc(entry.reason || entry.txOutcome || 'No additional reason recorded')}</p></article>`).join('')}</div>` : emptyCard('No journal entries returned','The gateway did not find persisted action journal records.','Historical daemon logs remain available above.');
+    body += journal.length ? `<div class="detail-grid">${journal.map(entry=>`<article class="detail-card"><h3>${esc(entry.type)}  -  ${esc(entry.outcome)}</h3><p>${esc(entry.at ? formatTime(entry.at) : 'Time not recorded')}</p><p>Target: ${esc(entry.target || 'Not reported')}</p><p>${esc(entry.reason || entry.txOutcome || 'No additional reason recorded')}</p></article>`).join('')}</div>` : emptyCard('No journal entries returned','The gateway did not find persisted action journal records.','Historical daemon logs remain available above.');
   } else if (view === 'settings') {
     const layers = s.watchdog?.layers || {};
-    body = `<div class="detail-heading"><div><span class="section-kicker">CONNECTION / COVERAGE / CAPABILITIES</span><h2>Agent details</h2><p>Read-only runtime facts. Configuration changes are not offered by this gateway.</p></div><span class="detail-state">${esc(s.protocol || 'Protocol unavailable')}</span></div><div class="detail-grid">${[['Gateway',`${s.agent?.host ?? '127.0.0.1'}:${s.agent?.port ?? '—'}`],['Gateway PID',s.agent?.pid ?? 'Not reported'],['Node runtime',s.agent?.version ?? 'Not reported'],['Project root',s.watchdog?.projectRoot ?? 'Not reported'],['Autonomy mode',s.watchdog?.autonomy ?? 'Not reported'],['Heartbeat state',s.watchdog?.state ?? 'Unknown']].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${esc(value)}</p></article>`).join('')}${[['Shell transcripts',layers.shell],['Process watcher',layers.process],['ConPTY capture',layers.conpty]].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${value===true?'Enabled':value===false?'Disabled / unavailable':'Not reported'}</p></article>`).join('')}${[['Persisted findings',caps.findingsSnapshot],['Action journal',caps.journalSnapshot],['Live finding events',caps.liveFindingEvents],['Repair execution',caps.repairExecution],['Event stream',caps.eventStream],['Snapshot API',caps.snapshot]].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${value===true?'Available':value===false?'Not wired':'Not reported'}</p></article>`).join('')}</div>`;
+    body = `<div class="detail-heading"><div><span class="section-kicker">CONNECTION / COVERAGE / CAPABILITIES</span><h2>Agent details</h2><p>Read-only runtime facts. Configuration changes are not offered by this gateway.</p></div><span class="detail-state">${esc(s.protocol || 'Protocol unavailable')}</span></div><div class="detail-grid">${[['Gateway',`${s.agent?.host ?? '127.0.0.1'}:${s.agent?.port ?? '-'}`],['Gateway PID',s.agent?.pid ?? 'Not reported'],['Node runtime',s.agent?.version ?? 'Not reported'],['Project root',s.watchdog?.projectRoot ?? 'Not reported'],['Autonomy mode',s.watchdog?.autonomy ?? 'Not reported'],['Heartbeat state',s.watchdog?.state ?? 'Unknown']].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${esc(value)}</p></article>`).join('')}${[['Shell transcripts',layers.shell],['Process watcher',layers.process],['ConPTY capture',layers.conpty]].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${value===true?'Enabled':value===false?'Disabled / unavailable':'Not reported'}</p></article>`).join('')}${[['Persisted findings',caps.findingsSnapshot],['Action journal',caps.journalSnapshot],['Live finding events',caps.liveFindingEvents],['Repair execution',caps.repairExecution],['Event stream',caps.eventStream],['Snapshot API',caps.snapshot]].map(([label,value])=>`<article class="detail-card"><h3>${esc(label)}</h3><p>${value===true?'Available':value===false?'Not wired':'Not reported'}</p></article>`).join('')}</div>`;
   }
   $('detail-view').innerHTML = body;
 }
@@ -346,10 +346,10 @@ function connectEvents() {
   const source = new EventSource('/api/events');
   state.eventSource = source;
   source.addEventListener('connected', () => {
-    $('activity-subtitle').textContent = 'Event stream connected · detailed findings are not yet bridged';
+    $('activity-subtitle').textContent = 'Event stream connected  -  detailed findings are not yet bridged';
   });
   source.onerror = () => {
-    $('activity-subtitle').textContent = 'Event stream reconnecting · snapshot polling continues';
+    $('activity-subtitle').textContent = 'Event stream reconnecting  -  snapshot polling continues';
   };
   source.onmessage = () => refreshSnapshot();
 }
@@ -362,7 +362,7 @@ $('activity-search').addEventListener('input',renderActivity);
 $('clear-filter').addEventListener('click',()=>{$('activity-search').value='';$('global-search').value='';renderActivity();renderGraph();});
 $('toggle-activity').addEventListener('click',()=>{$('activity-tray').classList.toggle('collapsed');state.activityCollapsed=$('activity-tray').classList.contains('collapsed');});
 $('collapse-activity').addEventListener('click',()=>{$('activity-tray').classList.toggle('collapsed');state.activityCollapsed=$('activity-tray').classList.contains('collapsed');});
-$('close-inspector').addEventListener('click',()=>{state.inspectorCollapsed=!state.inspectorCollapsed;$('workspace').classList.toggle('single-panel',state.inspectorCollapsed);$('close-inspector').textContent=state.inspectorCollapsed?'⇤':'⇥';$('close-inspector').setAttribute('aria-label',state.inspectorCollapsed?'Expand inspector':'Collapse inspector');});
+$('close-inspector').addEventListener('click',()=>{state.inspectorCollapsed=!state.inspectorCollapsed;$('workspace').classList.toggle('single-panel',state.inspectorCollapsed);$('close-inspector').textContent=state.inspectorCollapsed?'<<':'>>';$('close-inspector').setAttribute('aria-label',state.inspectorCollapsed?'Expand inspector':'Collapse inspector');});
 $('fit-graph').addEventListener('click',()=>{state.graphScale=1;renderGraph();});
 $('zoom-in').addEventListener('click',()=>{state.graphScale=Math.min(1.5,state.graphScale+.1);renderGraph();});
 $('zoom-out').addEventListener('click',()=>{state.graphScale=Math.max(.7,state.graphScale-.1);renderGraph();});

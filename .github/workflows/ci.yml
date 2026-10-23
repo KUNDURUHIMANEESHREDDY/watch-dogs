@@ -52,12 +52,15 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      # The frontend currently has no committed package-lock.json. Keep this
-      # visible as a follow-up: npm install verifies the build but does not yet
-      # make frontend dependency resolution reproducible across runs.
-      - name: Install frontend dependencies
-        run: npm install --prefix frontend --no-audit --no-fund
+      - name: Require committed frontend lockfile
+        shell: bash
+        run: test -f frontend/package-lock.json || { echo "::error::frontend/package-lock.json is required; generate it using npm and commit it"; exit 1; }
+
+      - name: Install locked frontend dependencies
+        run: npm ci --prefix frontend --no-audit --no-fund
 
       - name: Run frontend API contract tests
         run: npm test --prefix frontend
