@@ -13,6 +13,7 @@
   "scripts": {
     "test": "node --test \"test/*.test.mjs\"",
     "wd": "node bin/wd.js",
+    "wd:web": "node src/agent/web-gateway.mjs",
     "sandbox": "node sandbox/run-sandbox.mjs",
     "sandbox:live": "node sandbox/run-sandbox.mjs",
     "daemon-test": "node sandbox/run-daemon-test.mjs",
