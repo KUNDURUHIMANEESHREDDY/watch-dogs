@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Watch Dogs — Local Control Center</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="pair-screen" class="pair-screen">
+    <div class="pair-card">
+      <div class="brand-mark">WD<span>·</span></div>
+      <p class="eyebrow">LOCAL INSTANCE / ENCRYPTED SESSION</p>
+      <h1>Connect to your agent.</h1>
+      <p class="muted">Enter the one-time pairing code printed in the terminal that started the Watch Dogs gateway.</p>
+      <form id="pair-form">
+        <label for="pair-code">One-time pairing code</label>
+        <input id="pair-code" name="pair-code" type="password" autocomplete="off" required placeholder="Paste code from terminal">
+        <button class="button primary" type="submit">Connect securely <span>↗</span></button>
+        <p id="pair-error" class="error" role="status"></p>
+      </form>
+      <p class="micro">This interface connects to 127.0.0.1 only. It does not expose your PC to the network.</p>
+    </div>
+  </div>
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark small">WD<span>·</span></div><div><strong>WATCH DOGS</strong><small>LOCAL CONTROL</small></div></div>
+      <div class="nav-label">OPERATIONS</div>
+      <nav id="nav">
+        <button class="nav-item active" data-view="overview"><span>◫</span> Overview <kbd>01</kbd></button>
+        <button class="nav-item" data-view="activity"><span>⌁</span> Live activity <kbd>02</kbd></button>
+        <button class="nav-item" data-view="findings"><span>◇</span> Findings <kbd>03</kbd></button>
+        <button class="nav-item" data-view="repairs"><span>⌘</span> Repair studio <kbd>04</kbd></button>
+        <button class="nav-item" data-view="graph"><span>⌘</span> System graph <kbd>05</kbd></button>
+        <button class="nav-item" data-view="verification"><span>✓</span> Verification <kbd>06</kbd></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="connection-card"><span class="status-dot" id="connection-dot"></span><div><strong id="connection-label">Connecting…</strong><small>LOCAL AGENT</small></div><span class="pulse"></span></div>
+        <button id="logout" class="nav-item"><span>↪</span> Disconnect</button>
+        <div class="version">WATCH DOGS / LOCAL-FIRST<br>PROTOCOL v1 · NO CLOUD RELAY</div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumb"><span>WATCH DOGS</span><b>/</b><strong id="view-name">Overview</strong></div>
+        <div class="top-actions"><span class="local-tag"><i></i> LOOPBACK ONLY</span><button id="refresh" class="icon-button" title="Refresh snapshot" aria-label="Refresh snapshot">↻</button><div class="avatar">WD</div></div>
+      </header>
+      <section class="page-heading">
+        <div><p class="eyebrow">SYSTEM INTELLIGENCE / WINDOWS</p><h1 id="page-title">Control center<span>.</span></h1><p class="muted" id="page-subtitle">A truthful view of what your local watchdog can currently observe.</p></div>
+        <div class="heading-meta"><span class="status-pill" id="daemon-pill"><i></i> Checking daemon</span><small id="last-updated">Waiting for agent</small></div>
+      </section>
+      <div id="notice" class="notice hidden"></div>
+      <section class="metrics">
+        <article class="metric"><div class="metric-head"><span>WATCHDOG DAEMON</span><span class="metric-icon">◉</span></div><strong id="metric-daemon">—</strong><small id="metric-daemon-note">Awaiting heartbeat</small></article>
+        <article class="metric"><div class="metric-head"><span>LAST HEARTBEAT</span><span class="metric-icon">⌁</span></div><strong id="metric-heartbeat">—</strong><small>Read from local daemon record</small></article>
+        <article class="metric"><div class="metric-head"><span>MONITORING MODE</span><span class="metric-icon">◈</span></div><strong id="metric-mode">—</strong><small>Current configured autonomy</small></article>
+        <article class="metric"><div class="metric-head"><span>AGENT PROCESS</span><span class="metric-icon">#</span></div><strong id="metric-pid">—</strong><small id="metric-runtime">Node runtime</small></article>
+      </section>
+      <section class="content-grid">
+        <article class="panel wide-panel">
+          <div class="panel-head"><div><p class="eyebrow">OBSERVABILITY</p><h2 id="primary-title">Runtime status</h2></div><span class="live-label"><i></i> LOCAL DATA</span></div>
+          <div id="primary-content" class="primary-content"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">COVERAGE</p><h2>Capture layers</h2></div><span class="panel-symbol">⌁</span></div>
+          <div id="layers" class="layer-list"></div>
+          <p class="panel-foot">Coverage reflects agent-reported configuration, not guaranteed visibility into every process.</p>
+        </article>
+        <article class="panel log-panel">
+          <div class="panel-head"><div><p class="eyebrow">DAEMON OUTPUT</p><h2>Recent logs</h2></div><button id="logs-refresh" class="text-button">Refresh ↗</button></div>
+          <div id="logs" class="logs"><div class="empty-state">Waiting for local data…</div></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">TRUTHFUL STATUS</p><h2>Integration readiness</h2></div><span class="panel-symbol">◎</span></div>
+          <div id="capabilities" class="capability-list"></div>
+        </article>
+      </section>
+      <footer><span>WATCH DOGS <b>·</b> LOCAL CONTROL PLANE</span><span id="footer-state">NO REMOTE CONNECTION</span></footer>
+    </main>
+  </div>
+</body>
+</html>
