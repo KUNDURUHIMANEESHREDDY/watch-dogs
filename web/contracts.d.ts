@@ -102,6 +102,7 @@ export interface GatewayCapabilities {
   health: boolean;
   snapshot: boolean;
   eventStream: boolean;
+  findingsSnapshot: boolean;
   liveFindingEvents: boolean;
   repairExecution: boolean;
   note?: string;
