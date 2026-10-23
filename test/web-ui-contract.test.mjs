@@ -29,7 +29,7 @@ test('runtime contract names the protocol and explicit optional bridges', () => 
   assert.match(contractSource, /No browser-triggered repair endpoint is operational/);
 });
 
-test('UI does not claim missing finding or repair integrations are operational', () => {
+test('UI does not claim missing finding or repair integrations are operational', async () => {
   assert.match(appSource, /No synthetic topology/);
   assert.match(appSource, /Approval and execution controls remain disabled/);
   assert.match(appSource, /The UI will display findings only when the local watchdog has recorded real finding records/);
