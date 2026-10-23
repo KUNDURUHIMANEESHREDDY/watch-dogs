@@ -81,7 +81,6 @@ async function refreshSnapshot() {
     state.lastError = '';
     renderSnapshot();
     $('footer-state').textContent = 'LOCAL SESSION ACTIVE';
-    setConnection('connected');
   } catch (error) {
     state.lastError = error.message || 'Unable to reach local gateway.';
     $('footer-state').textContent = 'RECONNECTING';
