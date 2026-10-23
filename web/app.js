@@ -210,7 +210,7 @@ function renderGraph() {
     $('graph-empty-title').textContent = all.length ? 'No resources match these filters' : 'Waiting for observed resources';
     $('graph-empty-copy').textContent = all.length
       ? 'Try another resource type or clear the search. The graph uses only records returned by the local runtime.'
-      : 'The local gateway does not expose resource relationships yet. The graph will populate only from real runtime data—No synthetic topology is shown.';
+      : 'The local gateway does not expose resource relationships yet. The graph will populate only from real runtime data. No synthetic topology is shown.';
     $('graph-count').textContent = all.length ? `0 shown · ${all.length} observed` : '0 observed resources';
     return;
   }
