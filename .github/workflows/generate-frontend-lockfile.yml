@@ -1,0 +1,36 @@
+name: Generate frontend lockfile candidate
+
+on:
+  push:
+    branches:
+      - ci/bootstrap-frontend-lockfile-20261023
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve frontend dependency lock
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund --prefix frontend
+
+      - name: Validate generated lockfile
+        run: node --input-type=module -e "import fs from 'node:fs'; const lock = JSON.parse(fs.readFileSync('frontend/package-lock.json', 'utf8')); if (lock.lockfileVersion !== 3 || !lock.packages || !lock.packages['']) process.exit(1); console.log('lockfile v' + lock.lockfileVersion + ', ' + Object.keys(lock.packages).length + ' package entries')"
+
+      - name: Upload short-lived candidate for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-package-lock-candidate
+          path: frontend/package-lock.json
+          if-no-files-found: error
+          retention-days: 1
