@@ -34,10 +34,6 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
 
       - name: Require committed frontend lockfile
         if: matrix.directory == 'frontend'
