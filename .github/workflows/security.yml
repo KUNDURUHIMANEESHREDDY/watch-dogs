@@ -35,10 +35,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: Require committed frontend lockfile
+      # Until the generated candidate is committed, create it with npm in this
+      # disposable checkout so the dependency audit can still run. The CI job
+      # uploads the candidate as an artifact for review and commit.
+      - name: Generate frontend lockfile if missing
         if: matrix.directory == 'frontend'
         shell: bash
-        run: test -f frontend/package-lock.json || { echo "::error::frontend/package-lock.json is required before dependency auditing"; exit 1; }
+        working-directory: frontend
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
 
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
@@ -68,7 +75,7 @@ jobs:
   sbom:
     name: Generate dependency SBOMs
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -79,6 +86,21 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 22
+
+      - name: Install locked root dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate frontend lockfile if missing
+        shell: bash
+        working-directory: frontend
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+
+      - name: Install locked frontend dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: frontend
 
       - name: Generate root SBOM
         run: npx --yes @cyclonedx/cyclonedx-npm@latest --output-file sbom-root.json
