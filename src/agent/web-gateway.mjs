@@ -141,7 +141,7 @@ const server = createServer(async (req, res) => {
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error:'method_not_allowed' });
   const requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
-  const target = resolve(ROOT, `. ${requested}`.trim());
+  const target = resolve(ROOT, `.${requested}`);
   if (target !== ROOT && !target.startsWith(ROOT + sep)) return json(res, 403, { error:'path_not_allowed' });
   try {
     if (!existsSync(target) || !statSync(target).isFile()) return json(res, 404, { error:'not_found' });
