@@ -74,6 +74,14 @@ export interface FindingRecord {
   evidence?: string;
   resourceIds?: string[];
   timestamp?: string;
+  at?: string | null;
+  shell?: string | null;
+  cwd?: string | null;
+  sessionId?: string | null;
+  requiresHuman?: boolean;
+  suppressed?: string | null;
+  advisor?: { pending?: boolean; verdict?: string | null; requiresHuman?: boolean; why?: string | null } | null;
+  applied?: { status?: string; summary?: string | null } | null;
 }
 
 export interface RepairProposal {
