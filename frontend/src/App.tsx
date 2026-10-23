@@ -4,8 +4,8 @@ import { Background, Controls, MiniMap, ReactFlow, type Edge, type Node } from '
 import '@xyflow/react/dist/style.css';
 import type { FormEvent } from 'react';
 import {
-  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, ChevronDown,
-  CircleHelp, Clock3, Command, Cpu, FileClock, GitBranch, LayoutDashboard, ListFilter,
+  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2,
+  CircleHelp, Clock3, Cpu, FileClock, GitBranch, LayoutDashboard, ListFilter,
   LockKeyhole, LogOut, Network, RefreshCw, Search, Settings2, ShieldCheck, Terminal,
   Wrench, X,
 } from 'lucide-react';
