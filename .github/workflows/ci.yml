@@ -41,7 +41,7 @@ jobs:
         run: npm run sandbox
 
   frontend-build:
-    name: Frontend typecheck and production build
+    name: Frontend typecheck, tests and production build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
