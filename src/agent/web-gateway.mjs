@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { extname, join, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
@@ -60,6 +60,89 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
+function readFindings(limit = 200) {
+  const base = join(cfg.paths.data, 'findings.jsonl');
+  const records = [];
+  for (const path of [base + '.1', base]) {
+    try {
+      if (!existsSync(path)) continue;
+      const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+      for (const line of lines) {
+        try {
+          const record = JSON.parse(line);
+          if (record && typeof record === 'object' && record.ruleId && record.evidence) records.push(record);
+        } catch {
+          // A partial final line is ignored; the next snapshot can read the next complete record.
+        }
+      }
+    } catch {
+      // Read-only observability must not prevent the health snapshot from working.
+    }
+  }
+  // The watcher may persist the same signature more than once as advisor/applier
+  // state changes. Keep the latest record for each signature rather than showing
+  // duplicate incidents for each lifecycle update.
+  const latest = new Map();
+  for (const record of records) {
+    const key = record.signature || `${record.ruleId}::${record.sessionId || ''}::${record.evidence}`;
+    latest.set(key, record);
+  }
+  return [...latest.values()]
+    .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
+    .slice(-limit)
+    .map(record => ({
+      id: String(record.signature || `${record.ruleId}::${record.at || ''}`),
+      ruleId: record.ruleId,
+      title: record.title || record.ruleId,
+      severity: record.severity || 'unknown',
+      confidence: record.confidence || 'unknown',
+      evidence: record.evidence,
+      at: record.at || null,
+      shell: record.shell || null,
+      cwd: record.cwd || null,
+      sessionId: record.sessionId || null,
+      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null, verification: record.advisor.verification ? { verdict: record.advisor.verification.verdict || 'unknown', evidence: record.advisor.verification.evidence || 'unknown', why: typeof record.advisor.verification.why === 'string' ? record.advisor.verification.why.slice(0, 240) : null } : null } : null,
+      applied: record.applied ? { status: record.applied.status || 'unknown', summary: typeof record.applied.summary === 'string' ? record.applied.summary.slice(0, 240) : null } : null,
+      requiresHuman: Boolean(record.advisor?.requiresHuman),
+      suppressed: record.suppressed || null
+    }));
+}
+function readJournal(limit = 100) {
+  const dir = join(cfg.paths.data, 'journal');
+  let files = [];
+  try {
+    files = readdirSync(dir).filter(name => name.endsWith('.json')).sort();
+  } catch {
+    return [];
+  }
+  const entries = [];
+  for (const name of files) {
+    try {
+      const entry = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+      if (!entry || typeof entry !== 'object') continue;
+      let target = null;
+      if (typeof entry.abs === 'string') {
+        const rel = relative(cfg.projectRoot, resolve(entry.abs));
+        target = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
+          ? '[outside project]'
+          : rel;
+      }
+      entries.push({
+        id: String(entry.id || name.replace(/\.json$/i, '')),
+        at: entry.at || null,
+        outcome: entry.outcome || 'unknown',
+        type: entry.type || 'unknown',
+        target,
+        source: entry.source || null,
+        txOutcome: entry.txOutcome || null,
+        reason: typeof entry.why === 'string' ? entry.why.slice(0, 240) : null
+      });
+    } catch {
+      // A corrupt entry must not make the authenticated health snapshot unavailable.
+    }
+  }
+  return entries.sort((a, b) => String(a.at || '').localeCompare(String(b.at || ''))).slice(-limit).reverse();
+}
 function snapshot() {
   const heartbeat = readHeartbeat(cfg.paths.data);
   let logs = [];
@@ -69,6 +152,9 @@ function snapshot() {
   } catch {}
   let dataFiles = [];
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
+  const findings = readFindings();
+  const verifications = findings.filter(record => record.advisor?.verification).map(record => ({ id: record.id, title: record.title, status: record.advisor.verification.evidence || record.advisor.verification.verdict, verdict: record.advisor.verification.verdict, evidence: record.advisor.verification.why || record.advisor.verification.evidence, at: record.at }));
+  const journal = readJournal();
   return {
     protocol: 'watchdogs.local.v1',
     generatedAt: new Date().toISOString(),
@@ -84,11 +170,16 @@ function snapshot() {
       dataFiles
     },
     logs,
+    findings,
+    verifications,
+    journal,
     capabilities: {
       health: true, snapshot: true, eventStream: true,
+      findingsSnapshot: true,
+      journalSnapshot: true,
       liveFindingEvents: false,
       repairExecution: false,
-      note: 'The gateway currently exposes real health/heartbeat/log data. Live finding events and repair execution require an explicit in-process runtime bridge and are not simulated.'
+      note: 'The gateway exposes real health, heartbeat, daemon logs, and persisted findings. Live finding events and repair execution are not wired and are not simulated.'
     }
   };
 }
@@ -103,7 +194,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${HOST}:${PORT}`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   if (!isOriginAllowed(req)) return json(res, 403, { error: 'origin_not_allowed' });
   if (req.method !== 'GET' && req.method !== 'HEAD' && url.pathname.startsWith('/api/') && !req.headers.origin) {
     // Non-browser local clients are still subject to session authentication.
