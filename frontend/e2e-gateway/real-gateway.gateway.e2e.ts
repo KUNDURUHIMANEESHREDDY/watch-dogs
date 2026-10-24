@@ -143,6 +143,14 @@ test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair
   expect(cookie!.sameSite).toBe('Strict');
   expect(await page.evaluate(() => document.cookie)).not.toContain('wd_session=');
 
+  const malformedPath = await fetch(`${BASE_URL}/%E0%A4%A`);
+  expect(malformedPath.status).toBe(404);
+  await expect(malformedPath.json()).resolves.toEqual({ error: 'not_found' });
+  const snapshotAfterMalformedPath = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: `wd_session=${cookie!.value}` },
+  });
+  expect(snapshotAfterMalformedPath.status).toBe(200);
+
   // Revoke from outside the browser app so it retains its cookie and must handle a real 401.
   const revoke = await fetch(`${BASE_URL}/api/session/logout`, {
     method: 'POST',
