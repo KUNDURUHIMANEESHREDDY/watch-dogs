@@ -163,7 +163,7 @@ export default function App() {
         <form className="pair-form" onSubmit={connect}>
           <label htmlFor="pair-code">One-time pairing code</label>
           <input id="pair-code" autoComplete="off" spellCheck={false} type="password" value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="Paste code from terminal" required />
-          <button className="button button-primary" type="submit" disabled={isConnecting || !pairCode.trim()} aria-busy={isConnecting}>{isConnecting ? "Connecting…" : "Connect securely"} {!isConnecting && <ArrowUpRight size={16} />}</button>
+          <button className="button button-primary" type="submit" disabled={isConnecting || !pairCode.trim()} aria-busy={isConnecting} aria-label="Connect securely">{isConnecting ? "Connecting…" : "Connect securely"} {!isConnecting && <ArrowUpRight size={16} />}</button>
           {isConnecting && <p className="muted" role="status" aria-live="polite">Connecting to the local gateway…</p>}
           {pairError && <p className="error" role="alert">{pairError}</p>}
         </form>
@@ -188,69 +188,3 @@ export default function App() {
       </aside>
 
       <main className="main-area">
-        <header className="topbar">
-          <div className="breadcrumb"><span>WORKSPACE</span><span className="slash">/</span><b>{view}</b></div>
-          <div className="topbar-actions">
-            <label className="search-box"><Search size={16} /><input id="global-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search findings and logs…" /><kbd>Ctrl K</kbd>{query && <button className="clear-search" onClick={() => setQuery('')} aria-label="Clear search"><X size={14} /></button>}</label>
-            <span className="local-pill"><span className="status-dot online" /> LOCAL</span>
-            <button className="icon-button" onClick={() => void snapshotQuery.refetch()} title="Refresh snapshot" aria-label="Refresh snapshot"><RefreshCw size={16} className={snapshotQuery.isFetching ? 'spin' : ''} /></button>
-            <button className={`icon-button ${activityOpen ? 'selected' : ''}`} onClick={() => setActivityOpen(!activityOpen)} title="Toggle activity panel" aria-label="Toggle activity panel"><Activity size={16} /></button>
-          </div>
-        </header>
-
-        <section className="page-heading">
-          <div><div className="eyebrow">SYSTEM OBSERVABILITY <span>/</span> LOCAL AGENT</div><h1>{view}<span className="period">.</span></h1><p className="muted">A clear, evidence-led view of what the agent can actually observe.</p></div>
-          <div className="heading-meta"><span className={`status-dot ${snapshotQuery.isError ? 'offline' : 'online'}`} />{snapshotQuery.isError ? 'Gateway unavailable' : 'Snapshot connection'}<small>Updated {snapshotQuery.dataUpdatedAt ? timeLabel(new Date(snapshotQuery.dataUpdatedAt).toISOString()) : '—'}</small></div>
-        </section>
-
-        {snapshotQuery.isError && <div className="notice notice-warning"><AlertTriangle size={17} /><div><b>Snapshot unavailable</b><p>{snapshotQuery.error instanceof Error ? snapshotQuery.error.message : 'The local gateway could not be reached.'}</p></div><button className="button button-subtle" onClick={() => void snapshotQuery.refetch()}>Retry</button></div>}
-
-        {view === 'System graph' ? (
-          <section className="graph-panel">
-            <div className="panel-heading"><div><b>Observed system topology</b><p>Only nodes derived from the current snapshot are shown.</p></div><span className="subtle-chip"><GitBranch size={13} /> {graphNodes.length} nodes</span></div>
-            <div className="graph-canvas"><ReactFlow nodes={graphNodes} edges={graphEdges} fitView fitViewOptions={{ padding: 0.25 }} nodesDraggable nodesConnectable={false} proOptions={{ hideAttribution: true }}><Background color="#e5e9ef" gap={22} /><Controls /><MiniMap pannable zoomable /></ReactFlow></div>
-            {!snapshot?.watchdog && findings.length === 0 && <div className="empty-overlay"><Network size={22} /><b>No topology data yet</b><span>Graph elements appear when the gateway returns observed data.</span></div>}
-          </section>
-        ) : (
-          <section className="content-grid">
-            <div className="main-column">
-              {view === 'Overview' && <div className="metric-grid">
-                <Metric icon={Activity} label="Recent findings" value={snapshot?.findings?.length ?? '—'} detail="Persisted finding records" />
-                <Metric icon={AlertTriangle} label="Open incidents" value={incidents.length || '0'} detail="Based on recorded status" accent={incidents.length > 0} />
-                <Metric icon={ShieldCheck} label="Verification records" value={findings.filter((f) => Boolean(f.advisor?.verification)).length} detail="Evidence present in snapshot" />
-                <Metric icon={Clock3} label="Activity entries" value={journal.length} detail="Persisted journal records" />
-              </div>}
-
-              {(view === 'Overview' || view === 'Incidents' || view === 'Repair review' || view === 'Verification') && <section className="panel">
-                <div className="panel-heading"><div><b>{view === 'Overview' ? 'Recent findings' : view === 'Incidents' ? 'Incident queue' : view === 'Repair review' ? 'Repair review' : 'Verification evidence'}</b><p>{view === 'Repair review' ? 'Review recorded decisions. Execution is not available from this interface.' : 'Derived from persisted gateway records; no synthetic activity is shown.'}</p></div><span className="subtle-chip"><ListFilter size={13} /> {findings.length} records</span></div>
-                {findings.length === 0 ? <EmptyState title="Nothing to show yet" body={snapshotQuery.isError ? 'Reconnect to the local gateway to load records.' : 'The gateway has not returned any matching findings.'} /> : <div className="finding-list">{(view === 'Incidents' ? incidents : view === 'Repair review' ? findings.filter((f) => f.applied || f.requiresHuman) : view === 'Verification' ? findings.filter((f) => f.advisor?.verification) : findings).slice(0, 30).map((finding) => <button key={finding.id} className={`finding-row ${selected?.id === finding.id ? 'chosen' : ''}`} onClick={() => setSelected(finding)}><span className={`severity-mark severity-${String(finding.severity ?? 'unknown').toLowerCase()}`}><AlertTriangle size={15} /></span><span className="finding-copy"><b>{finding.title || finding.ruleId || 'Untitled finding'}</b><small>{finding.evidence || 'No evidence text supplied'} </small><span className="finding-tags"><span>{finding.ruleId || 'Unclassified'}</span>{finding.shell && <span>{finding.shell}</span>}{finding.requiresHuman && <span className="tag-warn">Human review</span>}</span></span><span className="finding-time">{timeLabel(finding.at)}</span><ArrowDownRight size={15} className="row-arrow" /></button>)}</div>}
-              </section>}
-
-              {view === 'Activity history' && <section className="panel"><div className="panel-heading"><div><b>Activity history</b><p>Sanitized journal summaries returned by the local gateway.</p></div><span className="subtle-chip">{journal.length} entries</span></div>{journal.length === 0 ? <EmptyState title="No journal entries" body="Recorded agent activity will appear here when available." /> : <div className="journal-list">{journal.slice().reverse().filter((entry) => [entry.type, entry.target, entry.reason, entry.outcome].join(' ').toLowerCase().includes(query.toLowerCase())).slice(0, 50).map((entry) => <div className="journal-row" key={entry.id}><span className="journal-icon"><Terminal size={15} /></span><span><b>{entry.type || 'Activity'} <i>{entry.outcome || 'unknown'}</i></b><small>{entry.target || entry.reason || 'No additional details'}</small></span><time>{timeLabel(entry.at)}</time></div>)}</div>}</section>}
-            </div>
-
-            {activityOpen && <aside className="right-column">
-              <section className="panel side-panel"><div className="panel-heading"><div><b>Connection</b><p>Local gateway status</p></div><span className={`status-dot ${snapshotQuery.isError ? 'offline' : 'online'}`} /></div><div className="connection-state"><span className="connection-icon"><LockKeyhole size={17} /></span><div><b>{snapshotQuery.isError ? 'Disconnected' : 'Paired session'}</b><small>127.0.0.1 · authenticated API</small></div></div><div className="side-stat"><span>Snapshot freshness</span><b>{snapshotQuery.dataUpdatedAt ? timeLabel(new Date(snapshotQuery.dataUpdatedAt).toISOString()) : 'Not received'}</b></div><div className="side-stat"><span>Finding snapshot</span><b>{snapshot?.findingsSnapshot ? 'Available' : 'Not confirmed'}</b></div><div className="side-stat"><span>Journal snapshot</span><b>{snapshot?.journalSnapshot ? 'Available' : 'Not confirmed'}</b></div></section>
-              <section className="panel side-panel"><div className="panel-heading"><div><b>Recent activity</b><p>Latest persisted journal records</p></div><FileClock size={16} /></div>{journal.slice().reverse().slice(0, 5).map((entry) => <div className="mini-activity" key={entry.id}><span className="mini-dot" /><span><b>{entry.type || 'Activity'}</b><small>{entry.target || entry.reason || entry.outcome || 'Recorded event'}</small></span><time>{timeLabel(entry.at)}</time></div>)}{journal.length === 0 && <p className="muted small-copy">No activity records available.</p>}</section>
-              <div className="safety-note"><ShieldCheck size={16} /><span><b>Safety boundary</b><small>Repair execution remains disabled in this UI. Review evidence before taking action in the agent's supported workflow.</small></span></div>
-            </aside>}
-          </section>
-        )}
-
-        <footer className="app-footer"><span><CircleHelp size={14} /> Observability is limited to data the agent exposes.</span><span>WATCH DOGS <i>•</i> LOCAL WORKSPACE</span></footer>
-      </main>
-
-      {selected && <div className="inspector-backdrop" onClick={() => setSelected(null)}><aside className="inspector" onClick={(event) => event.stopPropagation()}><div className="inspector-head"><div><div className="eyebrow">FINDING INSPECTOR</div><h2>Evidence details</h2></div><button className="icon-button" onClick={() => setSelected(null)} aria-label="Close inspector"><X size={17} /></button></div><div className="inspector-content"><span className={`severity-pill severity-${String(selected.severity ?? 'unknown').toLowerCase()}`}>{selected.severity || 'Unknown severity'}</span><h3>{selected.title || selected.ruleId}</h3><p className="muted">{selected.ruleId || 'Unclassified rule'}</p><Detail label="Evidence" value={selected.evidence} /><Detail label="Shell" value={selected.shell} /><Detail label="Working directory" value={selected.cwd} /><Detail label="Recorded at" value={timeLabel(selected.at)} /><Detail label="Advisor verdict" value={selected.advisor?.verdict} /><Detail label="Advisor notes" value={selected.advisor?.why} /><Detail label="Applied status" value={selected.applied?.status} /><Detail label="Applied summary" value={selected.applied?.summary} /><Detail label="Verification" value={selected.advisor?.verification?.verdict} /><Detail label="Verification evidence" value={selected.advisor?.verification?.evidence || selected.advisor?.verification?.why} /></div><div className="inspector-footer"><ShieldCheck size={15} /> Read-only evidence view</div></aside></div>}
-    </div>
-  );
-}
-
-function Metric({ icon: Icon, label, value, detail, accent = false }: { icon: typeof Activity; label: string; value: number | string; detail: string; accent?: boolean }) {
-  return <article className="metric-card"><div className="metric-top"><span className="metric-icon"><Icon size={17} /></span>{accent ? <span className="metric-status warn">Needs review</span> : <span className="metric-status">Live snapshot</span>}</div><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-detail">{detail}</div></article>;
-}
-function EmptyState({ title, body }: { title: string; body: string }) {
-  return <div className="empty-state"><span><CheckCircle2 size={20} /></span><b>{title}</b><p>{body}</p></div>;
-}
-function Detail({ label, value }: { label: string; value?: string | null }) {
-  return <div className="detail-item"><span>{label}</span><p>{value || 'Not supplied by gateway'}</p></div>;
-}
