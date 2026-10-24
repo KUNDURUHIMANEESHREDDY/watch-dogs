@@ -239,7 +239,14 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error:'not_found' });
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error:'method_not_allowed' });
-  const requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  let requested;
+  try {
+    requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  } catch {
+    // Malformed percent-encoding is a client path error, not a reason to let
+    // an async request handler reject outside the HTTP error boundary.
+    return json(res, 404, { error: 'not_found' });
+  }
   const target = resolve(ROOT, `.${requested}`);
   if (target !== ROOT && !target.startsWith(ROOT + sep)) return json(res, 403, { error:'path_not_allowed' });
   try {
