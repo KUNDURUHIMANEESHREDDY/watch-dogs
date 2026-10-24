@@ -198,3 +198,21 @@ test('gateway outage stays distinct from session expiry; restart invalidates old
   await page.getByRole('button', { name: 'Activity history' }).click();
   await expect(page.getByRole('heading', { name: /Activity history/ })).toBeVisible();
 });
+
+test('gateway caps active sessions instead of retaining unlimited paired sessions', async () => {
+  const code = pairingCode!;
+  const statuses: number[] = [];
+  for (let index = 0; index < 65; index += 1) {
+    const response = await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingCode: code }),
+    });
+    statuses.push(response.status);
+    if (response.status === 503) break;
+  }
+
+  expect(statuses.filter((status) => status === 200)).toHaveLength(64);
+  expect(statuses.at(-1)).toBe(503);
+  expect(statuses).toHaveLength(65);
+});
