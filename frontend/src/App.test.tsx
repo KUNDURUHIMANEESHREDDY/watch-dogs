@@ -1,8 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readSnapshot } from './App';
+import { isPairRequiredError, readSnapshot } from './App';
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('session expiry handling', () => {
+  it('classifies the explicit 401 pairing contract without treating gateway failures as auth failures', () => {
+    expect(isPairRequiredError(new Error('PAIR_REQUIRED'))).toBe(true);
+    expect(isPairRequiredError(new Error('Gateway returned HTTP 503'))).toBe(false);
+    expect(isPairRequiredError(new Error('Pairing code was rejected.'))).toBe(false);
+    expect(isPairRequiredError('PAIR_REQUIRED')).toBe(false);
+  });
 });
 
 describe('readSnapshot API contract', () => {

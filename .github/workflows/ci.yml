@@ -40,6 +40,33 @@ jobs:
       - name: Run product sandbox verification
         run: npm run sandbox
 
+  frontend-e2e:
+    name: Frontend session recovery E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify session expiry returns to pairing
+        run: npm run test:e2e
+
   frontend-build:
     name: Frontend typecheck, tests and production build
     runs-on: ubuntu-latest

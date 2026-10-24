@@ -35,6 +35,10 @@ const navItems: { label: View; icon: typeof LayoutDashboard }[] = [
   { label: 'Activity history', icon: FileClock },
 ];
 
+export function isPairRequiredError(error: unknown): boolean {
+  return error instanceof Error && error.message === 'PAIR_REQUIRED';
+}
+
 export async function readSnapshot(): Promise<Snapshot> {
   const response = await fetch('/api/snapshot', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
   if (response.status === 401) throw new Error('PAIR_REQUIRED');
@@ -54,6 +58,7 @@ export default function App() {
   const [selected, setSelected] = useState<Finding | null>(null);
   const [pairCode, setPairCode] = useState('');
   const [pairError, setPairError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
   const [paired, setPaired] = useState(false);
   const [activityOpen, setActivityOpen] = useState(true);
   const queryClient = useQueryClient();
@@ -63,8 +68,19 @@ export default function App() {
     queryFn: readSnapshot,
     enabled: paired,
     refetchInterval: 4_000,
+    // Authentication failures need a new pairing code, not three retries.
+    // Transient gateway errors still get a small bounded retry budget.
+    retry: (failureCount, error) => !isPairRequiredError(error) && failureCount < 2,
   });
   const snapshot = snapshotQuery.data;
+
+  useEffect(() => {
+    if (!paired || !snapshotQuery.isError || !isPairRequiredError(snapshotQuery.error)) return;
+    setPairCode('');
+    setPairError('Your local session expired. Enter the current one-time pairing code to reconnect.');
+    setPaired(false);
+    queryClient.removeQueries({ queryKey: ['snapshot'] });
+  }, [paired, snapshotQuery.isError, snapshotQuery.error, queryClient]);
   const findings = useMemo(() => (snapshot?.findings ?? []).filter((finding) => {
     const text = [finding.title, finding.ruleId, finding.evidence, finding.shell, finding.cwd].join(' ').toLowerCase();
     return text.includes(query.toLowerCase());
@@ -86,19 +102,23 @@ export default function App() {
 
   async function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isConnecting) return;
+    setIsConnecting(true);
     setPairError('');
     try {
       const response = await fetch('/api/session', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ pairingCode: pairCode }),
+        body: JSON.stringify({ pairingCode: pairCode.trim() }),
       });
       if (!response.ok) throw new Error('Pairing code was rejected. Copy the current code from the gateway terminal.');
       setPaired(true);
       setPairCode('');
     } catch (error) {
       setPairError(error instanceof Error ? error.message : 'Unable to connect to the local gateway.');
+    } finally {
+      setIsConnecting(false);
     }
   }
 
@@ -143,7 +163,8 @@ export default function App() {
         <form className="pair-form" onSubmit={connect}>
           <label htmlFor="pair-code">One-time pairing code</label>
           <input id="pair-code" autoComplete="off" spellCheck={false} type="password" value={pairCode} onChange={(event) => setPairCode(event.target.value)} placeholder="Paste code from terminal" required />
-          <button className="button button-primary" type="submit">Connect securely <ArrowUpRight size={16} /></button>
+          <button className="button button-primary" type="submit" disabled={isConnecting || !pairCode.trim()} aria-busy={isConnecting} aria-label="Connect securely">{isConnecting ? "Connecting…" : "Connect securely"} {!isConnecting && <ArrowUpRight size={16} />}</button>
+          {isConnecting && <p className="muted" role="status" aria-live="polite">Connecting to the local gateway…</p>}
           {pairError && <p className="error" role="alert">{pairError}</p>}
         </form>
         <div className="security-note"><LockKeyhole size={15} /> Loopback only <span className="bullet">·</span> Local gateway session</div>
