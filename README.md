@@ -1207,6 +1207,31 @@ HTTP 404 without taking down the process. Request/header/keep-alive timeouts are
 The repair endpoint is intentionally not implemented and returns HTTP 501; the UI
 must not imply that repair execution is available.
 
+### Windows target-machine acceptance (manual)
+
+Hosted CI exercises the gateway on a GitHub runner; it does not certify the user's
+Windows installation. Before release, run this checklist on the target machine:
+
+1. From a clean checkout, run `npm ci` and `npm test`.
+2. In a PowerShell window, start the gateway with `npm run wd:web`. Keep the
+   terminal visible so the one-time pairing code can be read locally.
+3. In a second PowerShell window, start the UI with `npm run web:dev` and open
+   only the loopback URL printed by the development server.
+4. Pair the UI. In browser developer tools, verify the session cookie is marked
+   HttpOnly and that renderer JavaScript cannot read it through
+   `document.cookie`.
+5. Stop the gateway process and start it again. Refresh the UI: the old in-memory
+   session must not restore access; the UI should return to pairing and recover
+   after a new code is entered.
+6. Confirm the gateway is reachable only on loopback. Do not use a LAN address,
+   reverse proxy, tunnel, or port-forwarding rule for this test.
+7. Record Windows version, Node version, exact command output, and any failures
+   in [the session-recovery acceptance issue](https://github.com/KUNDURUHIMANEESHREDDY/watch-dogs/issues/24).
+
+This is a manual acceptance checklist, not evidence that the target-machine run has
+already been performed. The automated request-size and malformed-path E2E tests
+remain separate regression coverage.
+
 ## Opting out
 
 Set `WD_DISABLE=1` in any shell to exclude it from capture without uninstalling.
