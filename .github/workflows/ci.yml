@@ -94,3 +94,26 @@ jobs:
 
       - name: Build frontend
         run: npm run web:build
+
+  required:
+    name: required
+    # This aggregate is the single check repository Settings should require.
+    # It fails closed if any CI job fails, is cancelled, or is unexpectedly skipped.
+    if: always()
+    needs: [core-tests, frontend-e2e, frontend-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Enforce all release checks
+        env:
+          CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
+          FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
+          FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
+        run: |
+          set -euo pipefail
+          printf 'core-tests: %s\\n' "$CORE_TESTS_RESULT"
+          printf 'frontend-e2e: %s\\n' "$FRONTEND_E2E_RESULT"
+          printf 'frontend-build: %s\\n' "$FRONTEND_BUILD_RESULT"
+          test "$CORE_TESTS_RESULT" = "success"
+          test "$FRONTEND_E2E_RESULT" = "success"
+          test "$FRONTEND_BUILD_RESULT" = "success"
