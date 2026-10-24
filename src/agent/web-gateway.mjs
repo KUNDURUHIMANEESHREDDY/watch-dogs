@@ -28,19 +28,30 @@ const safeEqual = (a, b) => {
 };
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
-    let raw = '';
+    const chunks = [];
+    let bytes = 0;
+    let tooLarge = false;
     req.on('data', chunk => {
-      raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_BODY) {
+      // Stop retaining bytes once the limit is crossed, but keep draining the
+      // request so the handler can return a deterministic HTTP 413 response.
+      if (tooLarge) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('request body too large'), { status: 413 }));
-        req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
     req.on('end', () => {
-      try { resolveBody(raw ? JSON.parse(raw) : {}); }
+      if (tooLarge) return;
+      try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
       catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
     });
-    req.on('error', reject);
+    req.on('error', error => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 function isOriginAllowed(req) {
