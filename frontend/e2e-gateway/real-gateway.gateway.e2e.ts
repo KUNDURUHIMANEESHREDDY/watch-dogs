@@ -200,7 +200,10 @@ test('gateway outage stays distinct from session expiry; restart invalidates old
 });
 
 test('gateway caps active sessions instead of retaining unlimited paired sessions', async () => {
-  const code = pairingCode!;
+  // Start with an empty in-memory session store so the capacity assertion is
+  // independent of cookies created by the preceding browser tests.
+  await stopGateway();
+  const code = await startGateway();
   const statuses: number[] = [];
   for (let index = 0; index < 65; index += 1) {
     const response = await fetch(`${BASE_URL}/api/session`, {
