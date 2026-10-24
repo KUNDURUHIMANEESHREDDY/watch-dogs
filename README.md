@@ -1192,6 +1192,21 @@ covers known secret shapes and is on by default, but it is not a guarantee. If
 that trade is not acceptable, leave `WD_TRACING` off and rely on the rule-based
 layer, which never leaves the machine.
 
+## Local control center gateway
+
+The optional browser control center is a **local-only interface**, not a remote admin
+API. It binds to `127.0.0.1` (port `4317` by default; override with `WD_WEB_PORT`),
+prints a pairing code to the local terminal, and issues an HttpOnly, SameSite=Strict
+session cookie. Sessions are held in memory and are invalidated when the gateway
+restarts. Do not expose this port through a reverse proxy, tunnel, or network bind.
+
+The gateway caps parsed JSON request bodies at 8 KiB. Oversized bodies receive HTTP
+413, malformed JSON receives HTTP 400, and malformed static URL encodings return
+HTTP 404 without taking down the process. Request/header/keep-alive timeouts are
+15s/10s/5s, and JSON/static responses are marked `Cache-Control: no-store`.
+The repair endpoint is intentionally not implemented and returns HTTP 501; the UI
+must not imply that repair execution is available.
+
 ## Opting out
 
 Set `WD_DISABLE=1` in any shell to exclude it from capture without uninstalling.
