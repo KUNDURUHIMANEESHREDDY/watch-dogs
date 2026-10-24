@@ -2,7 +2,7 @@
 
 ## Automated checks
 
-The GitHub Actions Security workflow audits the committed root and frontend npm lockfiles for high and critical advisories, scans Git changes for likely secrets with Gitleaks, and uploads CycloneDX dependency SBOMs as workflow artifacts. These checks supplement, and do not replace, code review or incident response.
+The GitHub Actions Security workflow audits the committed root and frontend npm lockfiles for high and critical advisories, scans the full Git history for likely secrets with Gitleaks, and uploads CycloneDX dependency SBOMs as workflow artifacts. These checks supplement, and do not replace, code review or incident response.
 
 A dependency audit is expected to fail on high or critical advisories. Do not lower the audit threshold to obtain a green build. Upgrade or replace the affected dependency and commit the regenerated lockfile.
 

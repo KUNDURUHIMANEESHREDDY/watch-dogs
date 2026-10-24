@@ -37,6 +37,12 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.directory }}/package-lock.json
 
+      - name: Require committed frontend lockfile
+        if: matrix.directory == 'frontend'
+        shell: bash
+        working-directory: frontend
+        run: test -f package-lock.json || { echo "::error::frontend/package-lock.json is required before dependency auditing"; exit 1; }
+
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
         working-directory: ${{ matrix.directory }}
@@ -83,6 +89,10 @@ jobs:
 
       - name: Install locked root dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Require committed frontend lockfile
+        shell: bash
+        run: test -f frontend/package-lock.json || { echo "::error::frontend/package-lock.json is required before SBOM generation"; exit 1; }
 
       - name: Install locked frontend dependencies
         run: npm ci --prefix frontend --no-audit --no-fund
