@@ -111,9 +111,9 @@ jobs:
           FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
         run: |
           set -euo pipefail
-          printf 'core-tests: %s\\n' "$CORE_TESTS_RESULT"
-          printf 'frontend-e2e: %s\\n' "$FRONTEND_E2E_RESULT"
-          printf 'frontend-build: %s\\n' "$FRONTEND_BUILD_RESULT"
+          echo "core-tests: $CORE_TESTS_RESULT"
+          echo "frontend-e2e: $FRONTEND_E2E_RESULT"
+          echo "frontend-build: $FRONTEND_BUILD_RESULT"
           test "$CORE_TESTS_RESULT" = "success"
           test "$FRONTEND_E2E_RESULT" = "success"
           test "$FRONTEND_BUILD_RESULT" = "success"
