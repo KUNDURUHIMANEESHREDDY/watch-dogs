@@ -3,14 +3,13 @@ name: Refresh frontend lockfile
 on:
   push:
     branches: [fix/frontend-vite-peer-compat-20261024]
-  pull_request:
-    paths:
-      - frontend/package.json
-      - .github/workflows/refresh-frontend-lock.yml
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: refresh-frontend-lock-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   refresh-lock:
@@ -25,6 +24,19 @@ jobs:
           node-version: 22
       - name: Regenerate lock from the declared compatible dependency graph
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lockfile if it changed
+        working-directory: .
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "Lockfile already current"
+          else
+            git commit -m "chore: align frontend lockfile with Vite 8"
+            git push
+          fi
       - name: Upload generated lockfile for review
         uses: actions/upload-artifact@v4
         with:
