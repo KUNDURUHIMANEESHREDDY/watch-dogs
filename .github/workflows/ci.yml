@@ -64,8 +64,41 @@ jobs:
       - name: Install Chromium for Playwright
         run: npx playwright install --with-deps chromium
 
-      - name: Verify session expiry returns to pairing
+      - name: Verify mocked session expiry returns to pairing
         run: npm run test:e2e
+
+  gateway-e2e:
+    name: Real gateway session and restart E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
+
+      - name: Install locked root dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install locked frontend dependencies
+        run: npm ci --prefix frontend --no-audit --no-fund
+
+      - name: Install Chromium for Playwright
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the production UI served by the gateway
+        run: npm run web:build
+
+      - name: Verify the real gateway session lifecycle
+        run: npm run test:e2e:gateway --prefix frontend
 
   frontend-build:
     name: Frontend typecheck, tests and production build
@@ -100,7 +133,7 @@ jobs:
     # This aggregate is the single check repository Settings should require.
     # It fails closed if any CI job fails, is cancelled, or is unexpectedly skipped.
     if: always()
-    needs: [core-tests, frontend-e2e, frontend-build]
+    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -109,11 +142,14 @@ jobs:
           CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
           FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
+          GATEWAY_E2E_RESULT: ${{ needs.gateway-e2e.result }}
         run: |
           set -euo pipefail
           echo "core-tests: $CORE_TESTS_RESULT"
           echo "frontend-e2e: $FRONTEND_E2E_RESULT"
           echo "frontend-build: $FRONTEND_BUILD_RESULT"
+          echo "gateway-e2e: $GATEWAY_E2E_RESULT"
           test "$CORE_TESTS_RESULT" = "success"
           test "$FRONTEND_E2E_RESULT" = "success"
           test "$FRONTEND_BUILD_RESULT" = "success"
+          test "$GATEWAY_E2E_RESULT" = "success"
