@@ -12,6 +12,7 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
+const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
 const sessions = new Map();
 const clients = new Set();
@@ -58,10 +59,15 @@ function isOriginAllowed(req) {
   const origin = req.headers.origin;
   return !origin || origin === `http://${HOST}:${PORT}`;
 }
+function pruneExpiredSessions(now = Date.now()) {
+  for (const [id, expires] of sessions) {
+    if (expires <= now) sessions.delete(id);
+  }
+}
 function authenticated(req) {
   const id = parseCookies(req.headers.cookie).wd_session;
   const expires = id && sessions.get(id);
-  if (!expires || expires < Date.now()) {
+  if (!expires || expires <= Date.now()) {
     if (id) sessions.delete(id);
     return false;
   }
@@ -211,6 +217,12 @@ const server = createServer(async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: e.message }); }
     if (!safeEqual(body.pairingCode ?? '', pairingCode)) return json(res, 401, { error: 'invalid_pairing_code' });
+    pruneExpiredSessions();
+    // A pairing code is reusable for local recovery, so cap concurrent sessions
+    // rather than allowing repeated pairing to grow this in-memory map forever.
+    if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+      return json(res, 503, { error: 'session_capacity_reached' });
+    }
     const id = randomBytes(32).toString('base64url');
     sessions.set(id, Date.now() + SESSION_TTL);
     return json(res, 200, { ok: true, expiresInSeconds: SESSION_TTL / 1000 }, { 'Set-Cookie': `wd_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}` });
