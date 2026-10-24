@@ -8,7 +8,8 @@
     "build": "tsc -b tsconfig.json && vite build --config vite.config.ts",
     "preview": "vite preview --config vite.config.ts",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:gateway": "playwright test --config playwright.gateway.config.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.5",
@@ -26,7 +27,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "tailwindcss": "^4.1.16",
     "typescript": "~7.0.2",
-    "vite": "^7.1.12",
+    "vite": "^8.3.5",
     "vitest": "^4.1.12"
   }
 }
