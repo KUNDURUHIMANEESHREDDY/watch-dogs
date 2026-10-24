@@ -249,6 +249,11 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch { json(res, 404, { error:'not_found' }); }
 });
+// Bound slow headers and bodies: oversized requests are drained to return 413,
+// but a client must not be able to hold the local gateway open indefinitely.
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 server.listen(PORT, HOST, () => {
   console.log('\nWATCH DOGS LOCAL CONTROL CENTER');
   console.log(`URL: http://${HOST}:${PORT}`);
