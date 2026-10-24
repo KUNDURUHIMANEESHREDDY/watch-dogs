@@ -70,7 +70,8 @@ test('announces pairing progress while the gateway request is pending', async ({
 
   await page.goto('/');
   await page.getByLabel('One-time pairing code').fill('test-pairing-code');
-  const connectButton = page.getByRole('button', { name: /Connect securely/ });
+  // The accessible name intentionally changes to "Connecting…" while pending.
+  const connectButton = page.getByRole('button', { name: /Connect securely|Connecting/ });
   await connectButton.click();
 
   await expect(page.getByRole('status')).toHaveCount(1);
