@@ -49,12 +49,22 @@ test('log tail handles missing files and rejects unbounded limits', () => {
   assert.throws(() => readBoundedLogTail('unused', { maxLines: MAX_LOG_TAIL_LINES + 1 }), /maxLines/);
 });
 
-test('log tail refuses symlinks to files outside the log path', { skip: process.platform === 'win32' }, () => {
+test('log tail refuses symlinks to files outside the log path', (t) => {
   withTempDir((dir) => {
     const target = join(dir, 'private.txt');
     const link = join(dir, 'daemon.log');
     writeFileSync(target, 'sensitive outside content\n');
-    symlinkSync(target, link);
+    try {
+      symlinkSync(target, link);
+    } catch (error) {
+      // Some Windows runners do not grant symlink creation privileges. Skip
+      // only when the OS denies fixture setup; exercise the fallback otherwise.
+      if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOSYS', 'UNKNOWN'].includes(error?.code)) {
+        t.skip(`symlink fixture unavailable on this Windows runner: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
     assert.deepEqual(readBoundedLogTail(link), []);
   });
 });
