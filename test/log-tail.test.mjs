@@ -34,7 +34,7 @@ test('log tail truncates a single oversized line and never exceeds configured ca
     const lines = readBoundedLogTail(path);
     assert.equal(lines.length, 2);
     assert.equal(lines[0], 'normal');
-    assert.equal(lines[1], `${'x'.repeat(MAX_LOG_LINE_CHARS)}…[truncated]`);
+    assert.equal(lines[1], `${'x'.repeat(MAX_LOG_LINE_CHARS)}...[truncated]`);
     assert.ok(lines.length <= MAX_LOG_TAIL_LINES);
     assert.ok(MAX_LOG_TAIL_BYTES <= 64 * 1024);
   });
