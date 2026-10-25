@@ -47,3 +47,16 @@ test('log tail handles missing files and rejects unbounded limits', () => {
   assert.throws(() => readBoundedLogTail('unused', { maxBytes: MAX_LOG_TAIL_BYTES + 1 }), /maxBytes/);
   assert.throws(() => readBoundedLogTail('unused', { maxLines: MAX_LOG_TAIL_LINES + 1 }), /maxLines/);
 });
+
+test('truncated log lines stay within the configured character cap including the marker', () => {
+  withTempDir((dir) => {
+    const path = join(dir, 'daemon.log');
+    writeFileSync(path, `${'x'.repeat(100)}\\n`);
+    for (const maxLineChars of [8, 16, 32]) {
+      const lines = readBoundedLogTail(path, { maxLineChars });
+      assert.equal(lines.length, 1);
+      assert.ok(lines[0].length <= maxLineChars, `returned ${lines[0].length} chars for cap ${maxLineChars}`);
+    }
+    assert.equal(readBoundedLogTail(path, { maxLineChars: 16 })[0], `xx...[truncated]`);
+  });
+});
