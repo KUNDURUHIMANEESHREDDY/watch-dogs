@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
+import { createSessionStore } from './session-store.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -13,7 +14,7 @@ const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const cfg = loadConfig();
-const sessions = new Map();
+const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
 const clients = new Set();
 const pairingCode = randomBytes(24).toString('base64url');
 
@@ -50,10 +51,7 @@ function isOriginAllowed(req) {
 function authenticated(req) {
   const id = parseCookies(req.headers.cookie).wd_session;
   const expires = id && sessions.get(id);
-  if (!expires || expires < Date.now()) {
-    if (id) sessions.delete(id);
-    return false;
-  }
+  if (!expires) return false;
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
