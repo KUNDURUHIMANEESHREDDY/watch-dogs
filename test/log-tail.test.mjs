@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -47,6 +47,16 @@ test('log tail handles missing files and rejects unbounded limits', () => {
   });
   assert.throws(() => readBoundedLogTail('unused', { maxBytes: MAX_LOG_TAIL_BYTES + 1 }), /maxBytes/);
   assert.throws(() => readBoundedLogTail('unused', { maxLines: MAX_LOG_TAIL_LINES + 1 }), /maxLines/);
+});
+
+test('log tail refuses symlinks to files outside the log path', { skip: process.platform === 'win32' }, () => {
+  withTempDir((dir) => {
+    const target = join(dir, 'private.txt');
+    const link = join(dir, 'daemon.log');
+    writeFileSync(target, 'sensitive outside content\\n');
+    symlinkSync(target, link);
+    assert.deepEqual(readBoundedLogTail(link), []);
+  });
 });
 
 test('truncated log lines stay within the configured character cap including the marker', () => {
