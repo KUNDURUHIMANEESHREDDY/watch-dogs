@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJournal } from '../src/agent/journal-reader.mjs';
@@ -44,13 +44,27 @@ test('journal snapshot bounds entry count and skips corrupt or oversized files',
       why: 'outside project'
     }));
 
+    // A journal entry must be a regular file, not a symlink that redirects
+    // the snapshot reader outside the journal directory.
+    const symlinkId = `${(base + 1003).toString(36)}-symlink`;
+    const symlinkTarget = join(root, 'symlink-target.json');
+    writeFileSync(symlinkTarget, JSON.stringify({
+      id: symlinkId,
+      at: new Date(base + 1003).toISOString(),
+      outcome: 'unknown',
+      type: 'patch',
+      abs: join(projectRoot, 'safe.js'),
+      why: 'must not be read through a symlink'
+    }));
+    symlinkSync(symlinkTarget, join(journalDir, `${symlinkId}.json`));
+
     const entries = readJournal(dataDir, projectRoot, 500);
     assert.equal(entries.length, 100, 'requested limits are capped at 100');
     assert.equal(entries[0].id, outsideId, 'newest valid entry is first');
     assert.equal(entries[0].target, '[outside project]', 'outside paths are redacted');
     assert.equal(entries.at(-1).id, ids[106], 'only the newest bounded window is returned');
     assert.ok(entries.every(entry => entry.reason.length <= 240));
-    assert.ok(!entries.some(entry => entry.id === oversizedId || entry.id === corruptId));
+    assert.ok(!entries.some(entry => entry.id === oversizedId || entry.id === corruptId || entry.id === symlinkId));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
