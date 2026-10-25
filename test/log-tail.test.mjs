@@ -51,7 +51,7 @@ test('log tail handles missing files and rejects unbounded limits', () => {
 test('truncated log lines stay within the configured character cap including the marker', () => {
   withTempDir((dir) => {
     const path = join(dir, 'daemon.log');
-    writeFileSync(path, `${'x'.repeat(100)}\\n`);
+    writeFileSync(path, 'x'.repeat(100) + '\\n');
     for (const maxLineChars of [8, 16, 32]) {
       const lines = readBoundedLogTail(path, { maxLineChars });
       assert.equal(lines.length, 1);
