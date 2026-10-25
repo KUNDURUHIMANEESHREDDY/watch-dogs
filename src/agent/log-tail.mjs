@@ -44,9 +44,15 @@ export function readBoundedLogTail(path, {
       .split(/\r?\n/)
       .filter(Boolean)
       .slice(-maxLines)
-      .map((line) => line.length > maxLineChars
-        ? `${line.slice(0, maxLineChars)}...[truncated]`
-        : line);
+      .map((line) => {
+        if (line.length <= maxLineChars) return line;
+        const marker = '...[truncated]';
+        // The configured cap applies to the returned line, including its marker.
+        // For very small caps there is no room for the marker, so return a safe prefix.
+        return maxLineChars > marker.length
+          ? `${line.slice(0, maxLineChars - marker.length)}${marker}`
+          : line.slice(0, maxLineChars);
+      });
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
     throw error;
