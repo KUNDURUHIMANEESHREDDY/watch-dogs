@@ -29,19 +29,30 @@ const safeEqual = (a, b) => {
 };
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
-    let raw = '';
+    const chunks = [];
+    let bytes = 0;
+    let tooLarge = false;
     req.on('data', chunk => {
-      raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_BODY) {
+      // Stop retaining bytes once the limit is crossed, but keep draining the
+      // request so the handler can return a deterministic HTTP 413 response.
+      if (tooLarge) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('request body too large'), { status: 413 }));
-        req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
     req.on('end', () => {
-      try { resolveBody(raw ? JSON.parse(raw) : {}); }
+      if (tooLarge) return;
+      try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
       catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
     });
-    req.on('error', reject);
+    req.on('error', error => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 function isOriginAllowed(req) {
@@ -51,7 +62,10 @@ function isOriginAllowed(req) {
 function authenticated(req) {
   const id = parseCookies(req.headers.cookie).wd_session;
   const expires = id && sessions.get(id);
-  if (!expires) return false;
+  if (!expires || expires <= Date.now()) {
+    if (id) sessions.delete(id);
+    return false;
+  }
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
@@ -226,7 +240,14 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error:'not_found' });
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error:'method_not_allowed' });
-  const requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  let requested;
+  try {
+    requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  } catch {
+    // Malformed percent-encoding is a client path error, not a reason to let
+    // an async request handler reject outside the HTTP error boundary.
+    return json(res, 404, { error: 'not_found' });
+  }
   const target = resolve(ROOT, `.${requested}`);
   if (target !== ROOT && !target.startsWith(ROOT + sep)) return json(res, 403, { error:'path_not_allowed' });
   try {
@@ -236,6 +257,11 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch { json(res, 404, { error:'not_found' }); }
 });
+// Bound slow headers and bodies: oversized requests are drained to return 413,
+// but a client must not be able to hold the local gateway open indefinitely.
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 server.listen(PORT, HOST, () => {
   console.log('\nWATCH DOGS LOCAL CONTROL CENTER');
   console.log(`URL: http://${HOST}:${PORT}`);
