@@ -45,7 +45,7 @@ export function readBoundedLogTail(path, {
       .filter(Boolean)
       .slice(-maxLines)
       .map((line) => line.length > maxLineChars
-        ? `${line.slice(0, maxLineChars)}…[truncated]`
+        ? `${line.slice(0, maxLineChars)}...[truncated]`
         : line);
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return [];
