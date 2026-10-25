@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readBoundedJsonlLines } from './findings-reader.mjs';
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
@@ -75,7 +76,7 @@ function readFindings(limit = 200) {
   for (const path of [base + '.1', base]) {
     try {
       if (!existsSync(path)) continue;
-      const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+      const lines = readBoundedJsonlLines(path);
       for (const line of lines) {
         try {
           const record = JSON.parse(line);
