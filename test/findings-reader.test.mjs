@@ -53,6 +53,7 @@ test('findings reader rejects invalid limits and ignores symlinks', (t) => {
     writeFileSync(target, '{"ruleId":"example","evidence":"safe"}\n');
     assert.throws(() => readBoundedJsonlLines(target, { maxBytes: 0 }), /maxBytes/);
     assert.throws(() => readBoundedJsonlLines(target, { maxLines: 0 }), /maxLines/);
+    assert.deepEqual(readBoundedJsonlLines(dir), [], 'directories must never be parsed as findings');
 
     try {
       symlinkSync(target, link);
