@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_JOURNAL_FILES = 200;
@@ -31,7 +31,7 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   for (const name of files) {
     const path = join(dir, name);
     try {
-      const info = statSync(path);
+      const info = lstatSync(path);
       if (!info.isFile() || info.size > MAX_JOURNAL_ENTRY_BYTES) continue;
       const entry = JSON.parse(readFileSync(path, 'utf8'));
       if (!entry || typeof entry !== 'object') continue;
