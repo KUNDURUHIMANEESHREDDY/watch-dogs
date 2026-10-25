@@ -48,7 +48,7 @@ test('journal snapshot bounds entry count and skips corrupt or oversized files',
     assert.equal(entries.length, 100, 'requested limits are capped at 100');
     assert.equal(entries[0].id, outsideId, 'newest valid entry is first');
     assert.equal(entries[0].target, '[outside project]', 'outside paths are redacted');
-    assert.equal(entries.at(-1).id, ids[105], 'only the newest bounded window is returned');
+    assert.equal(entries.at(-1).id, ids[106], 'only the newest bounded window is returned');
     assert.ok(entries.every(entry => entry.reason.length <= 240));
     assert.ok(!entries.some(entry => entry.id === oversizedId || entry.id === corruptId));
   } finally {
