@@ -127,6 +127,15 @@ test.afterAll(async () => {
 test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair restores the UI', async ({ page }) => {
   const code = pairingCode!;
   const snapshot = await pairWithGateway(page, code);
+
+  const oversizedResponse = await fetch(`${BASE_URL}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code, padding: 'x'.repeat(10 * 1024) }),
+  });
+  expect(oversizedResponse.status).toBe(413);
+  await expect(oversizedResponse.json()).resolves.toEqual({ error: 'request body too large' });
+
   console.log(`Real gateway verified: Node ${snapshot.agent.version}, PID ${snapshot.agent.pid}, port ${snapshot.agent.port}.`);
 
   const cookie = (await page.context().cookies(BASE_URL)).find((candidate) => candidate.name === 'wd_session');
@@ -134,6 +143,14 @@ test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair
   expect(cookie!.httpOnly).toBe(true);
   expect(cookie!.sameSite).toBe('Strict');
   expect(await page.evaluate(() => document.cookie)).not.toContain('wd_session=');
+
+  const malformedPath = await fetch(`${BASE_URL}/%E0%A4%A`);
+  expect(malformedPath.status).toBe(404);
+  await expect(malformedPath.json()).resolves.toEqual({ error: 'not_found' });
+  const snapshotAfterMalformedPath = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: `wd_session=${cookie!.value}` },
+  });
+  expect(snapshotAfterMalformedPath.status).toBe(200);
 
   // Revoke from outside the browser app so it retains its cookie and must handle a real 401.
   const revoke = await fetch(`${BASE_URL}/api/session/logout`, {
