@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readJournal } from './journal-reader.mjs';
 import { readBoundedJsonlLines } from './findings-reader.mjs';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
@@ -117,42 +118,6 @@ function readFindings(limit = 200) {
       suppressed: record.suppressed || null
     }));
 }
-function readJournal(limit = 100) {
-  const dir = join(cfg.paths.data, 'journal');
-  let files = [];
-  try {
-    files = readdirSync(dir).filter(name => name.endsWith('.json')).sort();
-  } catch {
-    return [];
-  }
-  const entries = [];
-  for (const name of files) {
-    try {
-      const entry = JSON.parse(readFileSync(join(dir, name), 'utf8'));
-      if (!entry || typeof entry !== 'object') continue;
-      let target = null;
-      if (typeof entry.abs === 'string') {
-        const rel = relative(cfg.projectRoot, resolve(entry.abs));
-        target = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
-          ? '[outside project]'
-          : rel;
-      }
-      entries.push({
-        id: String(entry.id || name.replace(/\.json$/i, '')),
-        at: entry.at || null,
-        outcome: entry.outcome || 'unknown',
-        type: entry.type || 'unknown',
-        target,
-        source: entry.source || null,
-        txOutcome: entry.txOutcome || null,
-        reason: typeof entry.why === 'string' ? entry.why.slice(0, 240) : null
-      });
-    } catch {
-      // A corrupt entry must not make the authenticated health snapshot unavailable.
-    }
-  }
-  return entries.sort((a, b) => String(a.at || '').localeCompare(String(b.at || ''))).slice(-limit).reverse();
-}
 function snapshot() {
   const heartbeat = readHeartbeat(cfg.paths.data);
   let logs = [];
@@ -164,7 +129,7 @@ function snapshot() {
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
   const findings = readFindings();
   const verifications = findings.filter(record => record.advisor?.verification).map(record => ({ id: record.id, title: record.title, status: record.advisor.verification.evidence || record.advisor.verification.verdict, verdict: record.advisor.verification.verdict, evidence: record.advisor.verification.why || record.advisor.verification.evidence, at: record.at }));
-  const journal = readJournal();
+  const journal = readJournal(cfg.paths.data, cfg.projectRoot);
   return {
     protocol: 'watchdogs.local.v1',
     generatedAt: new Date().toISOString(),
