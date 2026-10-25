@@ -53,7 +53,7 @@ test('log tail refuses symlinks to files outside the log path', { skip: process.
   withTempDir((dir) => {
     const target = join(dir, 'private.txt');
     const link = join(dir, 'daemon.log');
-    writeFileSync(target, 'sensitive outside content\\n');
+    writeFileSync(target, 'sensitive outside content\n');
     symlinkSync(target, link);
     assert.deepEqual(readBoundedLogTail(link), []);
   });
