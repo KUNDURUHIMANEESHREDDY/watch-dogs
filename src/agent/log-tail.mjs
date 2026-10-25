@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from 'node:fs';
 
 export const MAX_LOG_TAIL_BYTES = 64 * 1024;
 export const MAX_LOG_TAIL_LINES = 80;
@@ -25,9 +25,32 @@ export function readBoundedLogTail(path, {
 
   let fd;
   try {
-    fd = openSync(path, 'r');
+    const linkStats = lstatSync(path);
+    if (!linkStats.isFile() || linkStats.isSymbolicLink()) return [];
+
+    // O_NOFOLLOW closes the lstat/open symlink race on POSIX. On Windows,
+    // re-check the pathname against the opened file descriptor below.
+    const flags = process.platform === 'win32'
+      ? 'r'
+      : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+    fd = openSync(path, flags);
     const stats = fstatSync(fd);
     if (!stats.isFile() || stats.size === 0) return [];
+
+    if (!constants.O_NOFOLLOW) {
+      let currentStats;
+      try {
+        currentStats = lstatSync(path);
+      } catch {
+        return [];
+      }
+      if (
+        currentStats.isSymbolicLink()
+        || !currentStats.isFile()
+        || currentStats.dev !== stats.dev
+        || currentStats.ino !== stats.ino
+      ) return [];
+    }
 
     const start = Math.max(0, stats.size - maxBytes);
     const length = Math.min(stats.size, maxBytes);
