@@ -15,6 +15,7 @@ const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
+const MAX_SSE_CLIENTS = 32;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const cfg = loadConfig();
 const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
@@ -189,11 +190,25 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, agentPid: process.pid, timestamp: new Date().toISOString() });
     if (req.method === 'GET' && url.pathname === '/api/snapshot') return json(res, 200, snapshot());
     if (req.method === 'GET' && url.pathname === '/api/events') {
+      // A local dashboard can reconnect repeatedly; bound open streams so a
+      // stale tab or local client cannot retain unbounded sockets and timers.
+      if (clients.size >= MAX_SSE_CLIENTS) {
+        return json(res, 503, { error: 'event_stream_capacity_reached' }, { 'Retry-After': '5' });
+      }
       res.writeHead(200, { 'Content-Type':'text/event-stream; charset=utf-8', 'Cache-Control':'no-store', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
       res.write(`event: connected\ndata: ${JSON.stringify({ protocol:'watchdogs.local.v1', type:'connected', timestamp:new Date().toISOString() })}\n\n`);
       clients.add(res);
-      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch {} }, 15000);
-      req.on('close', () => { clearInterval(heartbeat); clients.delete(res); });
+      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { cleanup(); } }, 15000);
+      const cleanup = () => {
+        clearInterval(heartbeat);
+        clients.delete(res);
+      };
+      // IncomingMessage 'close' fires when the request body completes, which
+      // is immediately for GET. The response close event tracks the lifetime
+      // of the actual SSE stream and must own cleanup instead.
+      res.once('close', cleanup);
+      res.once('error', cleanup);
+      req.once('aborted', cleanup);
       return;
     }
     if (req.method === 'POST' && url.pathname === '/api/session/logout') {
