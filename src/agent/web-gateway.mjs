@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { readJournal } from './journal-reader.mjs';
 import { readBoundedLogTail } from './log-tail.mjs';
 import { readBoundedJsonlLines } from './findings-reader.mjs';
