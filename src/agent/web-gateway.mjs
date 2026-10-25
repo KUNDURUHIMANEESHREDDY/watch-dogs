@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { existsSync, statSync, readdirSync } from 'node:fs';
 import { readJournal } from './journal-reader.mjs';
+import { readBoundedLogTail } from './log-tail.mjs';
 import { readBoundedJsonlLines } from './findings-reader.mjs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -123,7 +124,7 @@ function snapshot() {
   let logs = [];
   try {
     const file = join(cfg.paths.data, 'daemon.log');
-    if (existsSync(file)) logs = readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).slice(-80).map((line, i) => ({ id: i, line }));
+    if (existsSync(file)) logs = readBoundedLogTail(file).map((line, i) => ({ id: i, line }));
   } catch {}
   let dataFiles = [];
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
