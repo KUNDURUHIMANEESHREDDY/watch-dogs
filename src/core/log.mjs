@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, statSync, renameSync, unlinkSync, existsSync } from 'node:fs';
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, statSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40, silent: 99 };
@@ -26,7 +26,12 @@ export function initLog({ level, file } = {}) {
     // Probe the configured destination now. Otherwise an invalid path or an
     // unwritable file is discovered only on the first log write, which is
     // silently swallowed and leaves an unattended daemon without diagnostics.
-    appendFileSync(file, "", { encoding: "utf8" });
+    const fd = openSync(file, "a");
+    try {
+      if (!fstatSync(fd).isFile()) throw new Error("log destination is not a regular file");
+    } finally {
+      closeSync(fd);
+    }
     logFile = file;
   } catch (e) {
     logFile = null;
