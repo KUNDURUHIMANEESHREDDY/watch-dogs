@@ -11,6 +11,7 @@ const COLOR = {
 };
 
 const MAX_LOG_BYTES = 2 * 1024 * 1024;
+const MAX_LOG_LINE_BYTES = 64 * 1024;
 let threshold = LEVELS[process.env.WD_LOG_LEVEL] ?? LEVELS.info;
 let logFile = null;
 
@@ -55,7 +56,7 @@ function emit(level, args) {
   const text = args
     .map((x) => (x instanceof Error ? (x.stack ?? x.message) : typeof x === 'string' ? x : safeJson(x)))
     .join(' ');
-  const line = `${ts} ${level.toUpperCase().padEnd(5)} ${text}`;
+  // Keep each record on one physical line and cap it so a single oversized\n  // exception or untrusted value cannot bypass file rotation and consume disk.\n  const singleLineText = text.replace(/\\r\\n|\\r|\\n/g, '\\\\n');\n  const line = truncateUtf8(`${ts} ${level.toUpperCase().padEnd(5)} ${singleLineText}`, MAX_LOG_LINE_BYTES);
   if (logFile) {
     try {
       rotateIfNeeded(logFile);
@@ -67,6 +68,21 @@ function emit(level, args) {
   }
   const useColor = process.stderr.isTTY && process.env.NO_COLOR === undefined;
   process.stderr.write(useColor ? `${COLOR[level]}${line}${COLOR.reset}\n` : line + '\n');
+}
+
+function truncateUtf8(value, maxBytes) {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  const suffix = ' …[truncated]';
+  const prefixBudget = maxBytes - Buffer.byteLength(suffix, 'utf8');
+  let prefix = '';
+  let used = 0;
+  for (const character of value) {
+    const bytes = Buffer.byteLength(character, 'utf8');
+    if (used + bytes > prefixBudget) break;
+    prefix += character;
+    used += bytes;
+  }
+  return prefix + suffix;
 }
 
 function safeJson(v) {
