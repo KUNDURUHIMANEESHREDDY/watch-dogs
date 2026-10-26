@@ -25,3 +25,27 @@ test('log records are single-line, control-safe, and bounded by UTF-8 bytes', as
     rmSync(directory, { recursive: true, force: true });
   }
 });
+test('invalid configured log destination falls back to stderr', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'watch-dogs-log-init-'));
+  try {
+    const { initLog, log } = await import('../src/core/log.mjs?log-init-fallback-test');
+    let stderr = '';
+    const originalWrite = process.stderr.write;
+    process.stderr.write = function (chunk, ...args) {
+      stderr += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+      return true;
+    };
+    try {
+      // Using an existing directory as the file destination forces the
+      // initial append probe to fail before logFile is configured.
+      initLog({ level: 'info', file: directory });
+      log.error('fallback-visible-diagnostic');
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    assert.match(stderr, /cannot open log file/, 'the invalid destination was not reported');
+    assert.match(stderr, /fallback-visible-diagnostic/, 'diagnostics were silently lost instead of falling back to stderr');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
