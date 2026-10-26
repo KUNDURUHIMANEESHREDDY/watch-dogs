@@ -58,7 +58,9 @@ function emit(level, args) {
     .join(' ');
   // Keep each record on one physical line and cap it so a single oversized
   // exception or untrusted value cannot bypass file rotation and consume disk.
-  const singleLineText = text.replace(/\r\n|\r|\n/g, '\\n');
+  // Escape terminal controls and Unicode line separators as well as CR/LF so
+  // untrusted text cannot forge terminal colors or visually split a record.
+  const singleLineText = escapeLogControls(text);
   const line = truncateUtf8(`${ts} ${level.toUpperCase().padEnd(5)} ${singleLineText}`, MAX_LOG_LINE_BYTES);
   if (logFile) {
     try {
@@ -71,6 +73,13 @@ function emit(level, args) {
   }
   const useColor = process.stderr.isTTY && process.env.NO_COLOR === undefined;
   process.stderr.write(useColor ? `${COLOR[level]}${line}${COLOR.reset}\n` : line + '\n');
+}
+
+function escapeLogControls(value) {
+  const singleLine = value.replace(/\r\n|\r|\n/g, '\\n');
+  return singleLine.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, (character) =>
+    `\\u${character.codePointAt(0).toString(16).padStart(4, '0')}`,
+  );
 }
 
 function truncateUtf8(value, maxBytes) {
