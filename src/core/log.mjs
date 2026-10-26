@@ -75,7 +75,7 @@ function emit(level, args) {
 
 function truncateUtf8(value, maxBytes) {
   if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
-  const suffix = ' …[truncated]';
+  const suffix = '...[truncated]';
   const prefixBudget = maxBytes - Buffer.byteLength(suffix, 'utf8');
   let prefix = '';
   let used = 0;
