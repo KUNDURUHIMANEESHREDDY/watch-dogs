@@ -5,6 +5,14 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Keep the API minor version compatible with the locked OTel core/exporter
+    # graph. @opentelemetry/core 2.12.0 declares API <1.10.0, so an isolated
+    # API 1.10.0 bump breaks npm ci. Security updates are not suppressed by this
+    # version-update rule; revisit after the upstream peer range is compatible.
+    ignore:
+      - dependency-name: "@opentelemetry/api"
+        update-types:
+          - "version-update:semver-minor"
     groups:
       observability-stack:
         patterns:
