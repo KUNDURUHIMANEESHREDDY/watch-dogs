@@ -23,6 +23,10 @@ export function initLog({ level, file } = {}) {
   // startup, which is precisely the failure the log exists to help diagnose.
   try {
     mkdirSync(dirname(file), { recursive: true });
+    // Probe the configured destination now. Otherwise an invalid path or an
+    // unwritable file is discovered only on the first log write, which is
+    // silently swallowed and leaves an unattended daemon without diagnostics.
+    appendFileSync(file, "", { encoding: "utf8" });
     logFile = file;
   } catch (e) {
     logFile = null;
