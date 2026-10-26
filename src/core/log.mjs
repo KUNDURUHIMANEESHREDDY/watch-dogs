@@ -56,7 +56,10 @@ function emit(level, args) {
   const text = args
     .map((x) => (x instanceof Error ? (x.stack ?? x.message) : typeof x === 'string' ? x : safeJson(x)))
     .join(' ');
-  // Keep each record on one physical line and cap it so a single oversized\n  // exception or untrusted value cannot bypass file rotation and consume disk.\n  const singleLineText = text.replace(/\\r\\n|\\r|\\n/g, '\\\\n');\n  const line = truncateUtf8(`${ts} ${level.toUpperCase().padEnd(5)} ${singleLineText}`, MAX_LOG_LINE_BYTES);
+  // Keep each record on one physical line and cap it so a single oversized
+  // exception or untrusted value cannot bypass file rotation and consume disk.
+  const singleLineText = text.replace(/\r\n|\r|\n/g, '\\n');
+  const line = truncateUtf8(`${ts} ${level.toUpperCase().padEnd(5)} ${singleLineText}`, MAX_LOG_LINE_BYTES);
   if (logFile) {
     try {
       rotateIfNeeded(logFile);
