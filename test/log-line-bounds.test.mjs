@@ -10,7 +10,7 @@ test('log records are single-line and bounded by UTF-8 bytes', async () => {
   try {
     const { initLog, log } = await import('../src/core/log.mjs?log-line-bounds-test');
     initLog({ level: 'info', file: path });
-    log.info('untrusted\\nERROR forged-entry', '🙂'.repeat(100_000));
+    log.info('untrusted\nERROR forged-entry', '🙂'.repeat(100_000));
 
     const output = readFileSync(path, 'utf8');
     assert.equal(output.trimEnd().split(/\r?\n/).length, 1, 'a message created a forged physical log line');
