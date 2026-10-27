@@ -25,16 +25,17 @@ function readBoundedRegularFile(path, maxBytes) {
   if (!initial.isFile() || initial.isSymbolicLink() || initial.size > maxBytes) return null;
 
   // O_NOFOLLOW prevents a journal path from being swapped to a symlink between
-  // validation and open on POSIX. On platforms without it, compare the opened
-  // descriptor with the current path before reading.
-  const flags = process.platform === 'win32'
-    ? 'r'
-    : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  // validation and open on supported POSIX platforms. Windows uses a normal
+  // open and must always take the post-open path/device/inode verification path.
+  const supportsNoFollowOpen = process.platform !== 'win32' && Boolean(constants.O_NOFOLLOW);
+  const flags = supportsNoFollowOpen
+    ? constants.O_RDONLY | constants.O_NOFOLLOW
+    : 'r';
   const fd = openSync(path, flags);
   try {
     const opened = fstatSync(fd);
     if (!opened.isFile() || opened.size > maxBytes) return null;
-    if (!constants.O_NOFOLLOW) {
+    if (!supportsNoFollowOpen) {
       let current;
       try {
         current = lstatSync(path);
