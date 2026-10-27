@@ -69,6 +69,10 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   const dir = join(dataDir, 'journal');
   let files = [];
   try {
+    // Do not follow a journal-directory symlink into an unrelated location.
+    // lstat is deliberate here: stat would resolve the link and accept its target.
+    const dirStat = lstatSync(dir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return [];
     files = readdirSync(dir)
       .filter(name => name.endsWith('.json'))
       .sort()
