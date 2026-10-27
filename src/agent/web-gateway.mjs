@@ -154,9 +154,9 @@ function snapshot() {
       health: true, snapshot: true, eventStream: true,
       findingsSnapshot: true,
       journalSnapshot: true,
-      liveFindingEvents: false,
+      liveFindingEvents: true,
       repairExecution: false,
-      note: 'The gateway exposes real health, heartbeat, daemon logs, and persisted findings. Live finding events and repair execution are not wired and are not simulated.'
+      note: 'The gateway streams newly persisted or updated finding records over the authenticated event stream. In-memory watcher events before persistence and browser-triggered repair execution are not connected.'
     }
   };
 }
@@ -166,6 +166,39 @@ function publish(type, data) {
     try { res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`); } catch { clients.delete(res); }
   }
 }
+
+function findingsFileState() {
+  const base = join(cfg.paths.data, 'findings.jsonl');
+  return [base + '.1', base].map(path => {
+    try {
+      const stat = statSync(path);
+      return `${path}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return `${path}:missing`;
+    }
+  }).join('|');
+}
+
+// Seed from the current persisted snapshot so connecting clients receive changes,
+// not a replay of every historical finding. The map is bounded by readFindings()
+// to the latest 200 sanitized records.
+let observedFindingsState = findingsFileState();
+let knownFindingRecords = new Map(readFindings().map(record => [record.id, JSON.stringify(record)]));
+const findingEventPoll = setInterval(() => {
+  const nextState = findingsFileState();
+  if (nextState === observedFindingsState) return;
+  observedFindingsState = nextState;
+
+  const current = readFindings();
+  const nextRecords = new Map();
+  for (const record of current) {
+    const fingerprint = JSON.stringify(record);
+    nextRecords.set(record.id, fingerprint);
+    if (knownFindingRecords.get(record.id) !== fingerprint) publish('finding', record);
+  }
+  knownFindingRecords = nextRecords;
+}, 1000);
+findingEventPoll.unref?.();
 const MIME = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml', '.ico':'image/x-icon' };
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${HOST}:${PORT}`);
@@ -252,6 +285,7 @@ server.listen(PORT, HOST, () => {
 });
 server.on('error', err => { console.error('Gateway failed:', err.message); process.exitCode = 1; });
 function shutdown() {
+  clearInterval(findingEventPoll);
   for (const res of clients) { try { res.end(); } catch {} }
   clients.clear();
   server.close(() => process.exit(0));
