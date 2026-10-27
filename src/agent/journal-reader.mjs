@@ -1,4 +1,12 @@
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+} from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_JOURNAL_FILES = 200;
@@ -12,6 +20,48 @@ const MAX_JOURNAL_RESULTS = 100;
  * retains the newest candidate files. Oversized/corrupt entries are omitted:
  * this is an observability snapshot and must not make the health UI unavailable.
  */
+function readBoundedRegularFile(path, maxBytes) {
+  const initial = lstatSync(path);
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.size > maxBytes) return null;
+
+  // O_NOFOLLOW prevents a journal path from being swapped to a symlink between
+  // validation and open on POSIX. On platforms without it, compare the opened
+  // descriptor with the current path before reading.
+  const flags = process.platform === 'win32'
+    ? 'r'
+    : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags);
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size > maxBytes) return null;
+    if (!constants.O_NOFOLLOW) {
+      let current;
+      try {
+        current = lstatSync(path);
+      } catch {
+        return null;
+      }
+      if (
+        current.isSymbolicLink()
+        || !current.isFile()
+        || current.dev !== opened.dev
+        || current.ino !== opened.ino
+      ) return null;
+    }
+
+    const buffer = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readSync(fd, buffer, offset, buffer.length - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    return buffer.subarray(0, offset).toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   const boundedLimit = Number.isSafeInteger(limit)
     ? Math.max(1, Math.min(limit, MAX_JOURNAL_RESULTS))
@@ -31,9 +81,9 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   for (const name of files) {
     const path = join(dir, name);
     try {
-      const info = lstatSync(path);
-      if (!info.isFile() || info.size > MAX_JOURNAL_ENTRY_BYTES) continue;
-      const entry = JSON.parse(readFileSync(path, 'utf8'));
+      const contents = readBoundedRegularFile(path, MAX_JOURNAL_ENTRY_BYTES);
+      if (contents === null) continue;
+      const entry = JSON.parse(contents);
       if (!entry || typeof entry !== 'object') continue;
 
       let target = null;
