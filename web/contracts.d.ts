@@ -162,7 +162,7 @@ export interface WatchDogsEvent<T = unknown> {
  * Current authenticated endpoints:
  * GET /api/health
  * GET /api/snapshot
- * GET /api/events (SSE connection + keepalive; finding events are not wired)
+ * GET /api/events (SSE connection + keepalive + persisted finding changes)
  * POST /api/session/logout
  *
  * No browser-triggered repair endpoint is operational. The existing gateway
