@@ -72,6 +72,8 @@ export interface FindingRecord {
   severity?: 'low' | 'medium' | 'high' | 'critical' | string;
   state?: string;
   evidence?: string;
+  /** True when evidence was truncated to the gateway's 4 KiB safety limit. */
+  evidenceTruncated?: boolean;
   resourceIds?: string[];
   timestamp?: string;
   at?: string | null;
