@@ -16,6 +16,9 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
 const MAX_SSE_CLIENTS = 32;
+const MAX_SSE_BUFFER_BYTES = 256 * 1024;
+const MAX_SSE_EVENT_BYTES = 16 * 1024;
+const MAX_FINDING_EVIDENCE_CHARS = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const cfg = loadConfig();
 const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
@@ -73,6 +76,12 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
+function boundedText(value, maxLength) {
+  if (typeof value === 'string') return value.slice(0, maxLength);
+  if (value == null) return null;
+  return String(value).slice(0, maxLength);
+}
+
 function readFindings(limit = 200) {
   const base = join(cfg.paths.data, 'findings.jsonl');
   const records = [];
@@ -104,20 +113,21 @@ function readFindings(limit = 200) {
     .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
     .slice(-limit)
     .map(record => ({
-      id: String(record.signature || `${record.ruleId}::${record.at || ''}`),
-      ruleId: record.ruleId,
-      title: record.title || record.ruleId,
-      severity: record.severity || 'unknown',
-      confidence: record.confidence || 'unknown',
-      evidence: record.evidence,
-      at: record.at || null,
-      shell: record.shell || null,
-      cwd: record.cwd || null,
-      sessionId: record.sessionId || null,
-      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null, verification: record.advisor.verification ? { verdict: record.advisor.verification.verdict || 'unknown', evidence: record.advisor.verification.evidence || 'unknown', why: typeof record.advisor.verification.why === 'string' ? record.advisor.verification.why.slice(0, 240) : null } : null } : null,
-      applied: record.applied ? { status: record.applied.status || 'unknown', summary: typeof record.applied.summary === 'string' ? record.applied.summary.slice(0, 240) : null } : null,
+      id: boundedText(record.signature || `${record.ruleId}::${record.at || ''}`, 256),
+      ruleId: boundedText(record.ruleId, 128),
+      title: boundedText(record.title || record.ruleId, 256),
+      severity: boundedText(record.severity || 'unknown', 32),
+      confidence: boundedText(record.confidence || 'unknown', 32),
+      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_CHARS),
+      evidenceTruncated: typeof record.evidence === 'string' && record.evidence.length > MAX_FINDING_EVIDENCE_CHARS,
+      at: boundedText(record.at, 64),
+      shell: boundedText(record.shell, 128),
+      cwd: boundedText(record.cwd, 1024),
+      sessionId: boundedText(record.sessionId, 256),
+      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: boundedText(record.advisor.verdict, 64), requiresHuman: Boolean(record.advisor.requiresHuman), why: boundedText(record.advisor.why, 240), verification: record.advisor.verification ? { verdict: boundedText(record.advisor.verification.verdict || 'unknown', 64), evidence: boundedText(record.advisor.verification.evidence || 'unknown', 128), why: boundedText(record.advisor.verification.why, 240) } : null } : null,
+      applied: record.applied ? { status: boundedText(record.applied.status || 'unknown', 64), summary: boundedText(record.applied.summary, 240) } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
-      suppressed: record.suppressed || null
+      suppressed: typeof record.suppressed === 'string' ? record.suppressed.slice(0, 240) : record.suppressed ? '[suppressed]' : null
     }));
 }
 function snapshot() {
@@ -162,8 +172,30 @@ function snapshot() {
 }
 function publish(type, data) {
   const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
+  const payload = `event: ${type}\\ndata: ${JSON.stringify(event)}\\n\\n`;
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
   for (const res of clients) {
-    try { res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`); } catch { clients.delete(res); }
+    if (res.destroyed || res.writableEnded) {
+      clients.delete(res);
+      continue;
+    }
+    // Slow readers must not accumulate unbounded event buffers. Closing the
+    // stream lets EventSource reconnect; snapshot polling is the recovery path.
+    if (payloadBytes > MAX_SSE_EVENT_BYTES || res.writableLength + payloadBytes > MAX_SSE_BUFFER_BYTES) {
+      clients.delete(res);
+      res.destroy();
+      continue;
+    }
+    try {
+      res.write(payload);
+      if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
+        clients.delete(res);
+        res.destroy();
+      }
+    } catch {
+      clients.delete(res);
+      res.destroy();
+    }
   }
 }
 
