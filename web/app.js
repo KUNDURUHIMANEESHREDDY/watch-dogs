@@ -348,7 +348,24 @@ function connectEvents() {
   const source = new EventSource('/api/events');
   state.eventSource = source;
   source.addEventListener('connected', () => {
-    $('activity-subtitle').textContent = 'Event stream connected  -  detailed findings are not yet bridged';
+    $('activity-subtitle').textContent = 'Live persisted finding stream connected  -  repair execution remains disabled';
+  });
+  source.addEventListener('finding', event => {
+    let envelope;
+    try { envelope = JSON.parse(event.data); } catch { return; }
+    if (envelope?.protocol !== 'watchdogs.local.v1' || envelope?.type !== 'finding') return;
+    const finding = envelope.data;
+    if (!finding || typeof finding !== 'object' || typeof finding.id !== 'string') return;
+    if (!state.snapshot) return;
+    const existing = Array.isArray(state.snapshot.findings) ? state.snapshot.findings : [];
+    state.snapshot = {
+      ...state.snapshot,
+      findings: [finding, ...existing.filter(item => String(item?.id ?? '') !== finding.id)].slice(0, 200)
+    };
+    state.lastSuccessAt = Date.now();
+    state.lastError = '';
+    renderSnapshot();
+    $('activity-subtitle').textContent = 'Live finding received  -  persisted runtime evidence';
   });
   source.onerror = () => {
     $('activity-subtitle').textContent = 'Event stream reconnecting  -  snapshot polling continues';
