@@ -172,7 +172,7 @@ function snapshot() {
 }
 function publish(type, data) {
   const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
-  const payload = `event: ${type}\\ndata: ${JSON.stringify(event)}\\n\\n`;
+  const payload = `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
   const payloadBytes = Buffer.byteLength(payload, 'utf8');
   for (const res of clients) {
     if (res.destroyed || res.writableEnded) {
