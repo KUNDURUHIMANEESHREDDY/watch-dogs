@@ -78,3 +78,39 @@ test('journal reader returns an empty snapshot for a missing journal directory',
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('journal reader refuses a journal directory that is a symlink', t => {
+  const root = mkdtempSync(join(tmpdir(), 'watch-dogs-journal-dir-link-'));
+  const dataDir = join(root, '.watchdog');
+  const externalJournalDir = join(root, 'external-journal');
+  const projectRoot = join(root, 'project');
+  const journalDir = join(dataDir, 'journal');
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(externalJournalDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    writeFileSync(join(externalJournalDir, '20260101-entry.json'), JSON.stringify({
+      id: 'external-entry',
+      at: '2026-01-01T00:00:00.000Z',
+      outcome: 'verified',
+      type: 'patch',
+      abs: join(projectRoot, 'file.js'),
+      why: 'must not be read from a redirected directory'
+    }));
+
+    try {
+      symlinkSync(externalJournalDir, journalDir, 'dir');
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) {
+        t.skip(`directory symlinks are unavailable on this runner (${error.code})`);
+        return;
+      }
+      throw error;
+    }
+
+    assert.deepEqual(readJournal(dataDir, projectRoot), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
