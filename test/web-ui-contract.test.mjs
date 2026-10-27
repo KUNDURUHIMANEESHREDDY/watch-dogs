@@ -156,7 +156,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     title: 'Live finding regression',
     severity: 'high',
     confidence: 'high',
-    evidence: 'synthetic test evidence only',
+    evidence: 'x'.repeat(6000),
     at: new Date().toISOString()
   };
   await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n');
@@ -167,5 +167,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   assert.equal(envelope.protocol, 'watchdogs.local.v1');
   assert.equal(envelope.type, 'finding');
   assert.equal(envelope.data.ruleId, 'TEST_LIVE_FINDING');
-  assert.equal(envelope.data.evidence, 'synthetic test evidence only');
+  assert.equal(envelope.data.evidence.length, 4096);
+  assert.equal(envelope.data.evidenceTruncated, true);
+  assert.ok(Buffer.byteLength(match[1], 'utf8') < 16 * 1024, 'SSE event payload should remain bounded');
 });
