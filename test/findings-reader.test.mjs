@@ -56,7 +56,7 @@ test('findings reader rejects invalid limits and ignores symlinks', (t) => {
       symlinkSync(target, link);
     } catch (error) {
       if (process.platform === 'win32') {
-        t.skip('Creating a symlink is not permitted by this Windows runner.');
+        t.skip('Creating a symlink is not permitted on this Windows runner.');
         return;
       }
       throw error;
@@ -65,11 +65,11 @@ test('findings reader rejects invalid limits and ignores symlinks', (t) => {
   });
 });
 
-test('findings reader rejects an oversized regular-file swap between lstat and open', (t) => {
+test('findings reader rejects a regular-file replacement between lstat and open', (t) => {
   withTempDir((dir) => {
     const path = join(dir, 'findings.jsonl');
     const originalPath = join(dir, 'findings-original.jsonl');
-    writeFileSync(path, '{"id":"small"}\n');
+    writeFileSync(path, '{"id":"original"}\n');
 
     let swapped = false;
     const originalOpenSync = fs.openSync;
@@ -78,8 +78,8 @@ test('findings reader rejects an oversized regular-file swap between lstat and o
         swapped = true;
         renameSync(path, originalPath);
         writeFileSync(path, JSON.stringify({
-          id: 'oversized',
-          payload: 'x'.repeat(4096),
+          id: 'replacement',
+          payload: 'small',
         }) + '\n');
       }
       return originalOpenSync(candidatePath, flags, mode);
@@ -88,9 +88,9 @@ test('findings reader rejects an oversized regular-file swap between lstat and o
     syncBuiltinESMExports();
     try {
       assert.deepEqual(
-        readBoundedJsonlLines(path, { maxBytes: 64, maxLines: 10 }),
+        readBoundedJsonlLines(path, { maxBytes: 4096, maxLines: 10 }),
         [],
-        'opened descriptor size must be checked before allocating the read buffer',
+        'descriptor identity must match the file seen by the initial lstat',
       );
       assert.equal(swapped, true, 'test must replace the path after initial lstat');
     } finally {
