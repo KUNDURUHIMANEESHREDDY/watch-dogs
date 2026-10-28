@@ -45,23 +45,21 @@ export function readBoundedJsonlLines(
     const openedStat = fstatSync(fd);
     if (!openedStat.isFile()) return [];
 
-    // On platforms without O_NOFOLLOW, validate that the pathname still names
-    // the file opened above. This closes the lstat/open symlink-swap window:
-    // after this check, reads use the already-open descriptor, not the path.
-    if (!constants.O_NOFOLLOW) {
-      let currentStat;
-      try {
-        currentStat = lstatSync(path);
-      } catch {
-        return [];
-      }
-      if (
-        currentStat.isSymbolicLink()
-        || !currentStat.isFile()
-        || currentStat.dev !== openedStat.dev
-        || currentStat.ino !== openedStat.ino
-      ) return [];
+    // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms,
+    // but does not stop a regular-file pathname swap between lstat and open.
+    // Verify device/inode identity on every platform; reads then use this fd.
+    let currentStat;
+    try {
+      currentStat = lstatSync(path);
+    } catch {
+      return [];
     }
+    if (
+      currentStat.isSymbolicLink()
+      || !currentStat.isFile()
+      || currentStat.dev !== openedStat.dev
+      || currentStat.ino !== openedStat.ino
+    ) return [];
 
     // Keep one extra byte so we can distinguish a tail beginning exactly on a
     // newline from one beginning in the middle of a record.
