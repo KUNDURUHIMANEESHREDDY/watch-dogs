@@ -199,7 +199,7 @@ function writeSsePayload(res, payload) {
 function publish(type, data) {
   const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
   // Standard SSE IDs let EventSource send Last-Event-ID after a reconnect.
-  const payload = `id: ${event.event_id}\\nevent: ${type}\\ndata: ${JSON.stringify(event)}\\n\\n`;
+  const payload = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
   if (Buffer.byteLength(payload, 'utf8') <= MAX_SSE_EVENT_BYTES) {
     eventHistory.push({ id: event.event_id, payload });
     if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
@@ -320,7 +320,7 @@ const server = createServer(async (req, res) => {
             timestamp: new Date().toISOString(),
             data: { reason: 'event_history_unavailable', snapshotRequired: true }
           };
-          if (!writeSsePayload(res, `event: reset\\ndata: ${JSON.stringify(reset)}\\n\\n`)) cleanup();
+          if (!writeSsePayload(res, `event: reset\ndata: ${JSON.stringify(reset)}\n\n`)) cleanup();
         } else {
           for (const item of eventHistory.slice(index + 1)) {
             if (!writeSsePayload(res, item.payload)) {
