@@ -65,7 +65,7 @@ $('pair-form').addEventListener('submit', async event => {
     showApp();
     await refreshSnapshot();
     connectEvents();
-    state.pollTimer = setInterval(refreshSnapshot, 10000);
+    state.pollTimer = setInterval(refreshAndReconnectEvents, 10000);
     state.freshnessTimer = setInterval(updateFreshness, 1000);
   } catch (error) {
     $('pair-error').textContent = error.message === 'invalid_pairing_code'
@@ -88,6 +88,12 @@ async function refreshSnapshot() {
     showNotice(`Connection interrupted. Retrying automatically. ${state.lastError}`);
     updateFreshness();
   }
+}
+async function refreshAndReconnectEvents() {
+  await refreshSnapshot();
+  // A reset can leave the stream closed if the snapshot request fails transiently.
+  // The normal polling path retries and reconnects only after a valid snapshot.
+  if (state.snapshot && !state.lastError && !state.eventSource) connectEvents();
 }
 function validateSnapshot(value) {
   if (!value || typeof value !== 'object' || value.protocol !== 'watchdogs.local.v1') {
@@ -356,10 +362,7 @@ function connectEvents() {
     source.close();
     if (state.eventSource === source) state.eventSource = null;
     $('activity-subtitle').textContent = 'Event history unavailable  -  refreshing authenticated snapshot';
-    await refreshSnapshot();
-    // Reconnect only if the authenticated snapshot succeeded and no newer stream
-    // was created meanwhile. A failed/expired session must not start another stream.
-    if (state.snapshot && !state.lastError && !state.eventSource) connectEvents();
+    await refreshAndReconnectEvents();
   });
   source.addEventListener('finding', event => {
     let envelope;
