@@ -263,11 +263,31 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type':'text/event-stream; charset=utf-8', 'Cache-Control':'no-store', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
       res.write(`event: connected\ndata: ${JSON.stringify({ protocol:'watchdogs.local.v1', type:'connected', timestamp:new Date().toISOString() })}\n\n`);
       clients.add(res);
-      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { cleanup(); } }, 15000);
+      const keepalive = ': keepalive\n\n';
       const cleanup = () => {
         clearInterval(heartbeat);
         clients.delete(res);
       };
+      const heartbeat = setInterval(() => {
+        // Bound heartbeat writes too: a peer that never reads can otherwise
+        // accumulate keepalive bytes even when no findings are published.
+        if (res.destroyed || res.writableEnded ||
+            res.writableLength + Buffer.byteLength(keepalive, 'utf8') > MAX_SSE_BUFFER_BYTES) {
+          cleanup();
+          res.destroy();
+          return;
+        }
+        try {
+          res.write(keepalive);
+          if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
+            cleanup();
+            res.destroy();
+          }
+        } catch {
+          cleanup();
+          res.destroy();
+        }
+      }, 15000);
       // IncomingMessage 'close' fires when the request body completes, which
       // is immediately for GET. The response close event tracks the lifetime
       // of the actual SSE stream and must own cleanup instead.
