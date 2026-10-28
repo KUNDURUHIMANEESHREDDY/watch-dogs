@@ -54,6 +54,9 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /liveFindingEvents: true/);
   assert.match(gatewaySource, /const keepalive = ': keepalive\\n\\n';/);
+  assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
+  assert.match(gatewaySource, /last-event-id/);
+  assert.match(appSource, /addEventListener\('reset'/);
   assert.match(gatewaySource, /res\.writableLength \+ Buffer\.byteLength\(keepalive, 'utf8'\) > MAX_SSE_BUFFER_BYTES/);
   assert.match(gatewaySource, /repairExecution: false/);
   assert.match(appSource, /addEventListener\('finding'/);
@@ -172,4 +175,42 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   assert.equal(envelope.data.evidence.length, 4096);
   assert.equal(envelope.data.evidenceTruncated, true);
   assert.ok(Buffer.byteLength(match[1], 'utf8') < 16 * 1024, 'SSE event payload should remain bounded');
+  const firstEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(eventText)?.[1];
+  assert.ok(firstEventId, 'finding events should expose a standard SSE id');
+
+  const secondRecord = {
+    signature: 'test-live-finding-replay',
+    ruleId: 'TEST_LIVE_FINDING_REPLAY',
+    title: 'Replay finding regression',
+    severity: 'medium',
+    confidence: 'high',
+    evidence: 'replay evidence',
+    at: new Date(Date.now() + 1).toISOString()
+  };
+  await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n' + JSON.stringify(secondRecord) + '\n');
+  const secondText = await readSseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'second persisted finding event was not delivered');
+  const secondEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(secondText)?.[1];
+  assert.ok(secondEventId, 'second finding should expose an SSE id');
+  await reader.cancel();
+  reader = undefined;
+
+  const replayResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': firstEventId }
+  });
+  assert.equal(replayResponse.status, 200);
+  reader = replayResponse.body.getReader();
+  const replayText = await readSseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'missed finding was not replayed');
+  assert.match(replayText, /event: connected/);
+  assert.match(replayText, /event: finding/);
+  assert.match(replayText, /TEST_LIVE_FINDING_REPLAY/);
+
+  await reader.cancel();
+  reader = undefined;
+  const resetResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': '000000000000000000000000' }
+  });
+  assert.equal(resetResponse.status, 200);
+  reader = resetResponse.body.getReader();
+  const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'expired event history did not request a snapshot refresh');
+  assert.ok(resetText.includes('"snapshotRequired":true'));
 });
