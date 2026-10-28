@@ -350,9 +350,16 @@ function connectEvents() {
   source.addEventListener('connected', () => {
     $('activity-subtitle').textContent = 'Live persisted finding stream connected  -  repair execution remains disabled';
   });
-  source.addEventListener('reset', () => {
-    void refreshSnapshot();
+  source.addEventListener('reset', async () => {
+    // A reset means this EventSource's Last-Event-ID is no longer replayable.
+    // Close it before refreshing so a new EventSource starts without the stale cursor.
+    source.close();
+    if (state.eventSource === source) state.eventSource = null;
     $('activity-subtitle').textContent = 'Event history unavailable  -  refreshing authenticated snapshot';
+    await refreshSnapshot();
+    // Reconnect only if the authenticated snapshot succeeded and no newer stream
+    // was created meanwhile. A failed/expired session must not start another stream.
+    if (state.snapshot && !state.lastError && !state.eventSource) connectEvents();
   });
   source.addEventListener('finding', event => {
     let envelope;
