@@ -1,11 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readBoundedJsonlLines } from '../src/agent/findings-reader.mjs';
@@ -65,5 +62,40 @@ test('findings reader rejects invalid limits and ignores symlinks', (t) => {
       throw error;
     }
     assert.deepEqual(readBoundedJsonlLines(link), []);
+  });
+});
+
+test('findings reader rejects an oversized regular-file swap between lstat and open', (t) => {
+  withTempDir((dir) => {
+    const path = join(dir, 'findings.jsonl');
+    const originalPath = join(dir, 'findings-original.jsonl');
+    writeFileSync(path, '{"id":"small"}\n');
+
+    let swapped = false;
+    const originalOpenSync = fs.openSync;
+    const openMock = t.mock.method(fs, 'openSync', (candidatePath, flags, mode) => {
+      if (String(candidatePath) === path && !swapped) {
+        swapped = true;
+        renameSync(path, originalPath);
+        writeFileSync(path, JSON.stringify({
+          id: 'oversized',
+          payload: 'x'.repeat(4096),
+        }) + '\n');
+      }
+      return originalOpenSync(candidatePath, flags, mode);
+    });
+
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(
+        readBoundedJsonlLines(path, { maxBytes: 64, maxLines: 10 }),
+        [],
+        'opened descriptor size must be checked before allocating the read buffer',
+      );
+      assert.equal(swapped, true, 'test must replace the path after initial lstat');
+    } finally {
+      openMock.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 });
