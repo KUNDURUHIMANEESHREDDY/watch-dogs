@@ -4,14 +4,42 @@ import {
   fstatSync,
   lstatSync,
   openSync,
+  opendirSync,
   readSync,
-  readdirSync,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_JOURNAL_FILES = 200;
 const MAX_JOURNAL_ENTRY_BYTES = 256 * 1024;
 const MAX_JOURNAL_RESULTS = 100;
+
+/**
+ * Enumerate only a bounded working set of the newest journal filenames.
+ *
+ * Directory iteration itself is streaming. Sorting the complete directory
+ * with readdirSync would allocate an array proportional to the lifetime of
+ * the journal, even though the UI only needs a bounded recent snapshot.
+ */
+function readNewestJournalNames(dir, limit) {
+  const handle = opendirSync(dir);
+  const names = [];
+  try {
+    let entry;
+    while ((entry = handle.readSync()) !== null) {
+      if (!entry.name.endsWith('.json')) continue;
+      names.push(entry.name);
+      // Keep at most 2 * limit names between trims; memory stays bounded even
+      // when the journal directory contains a very large number of entries.
+      if (names.length >= limit * 2) {
+        names.sort();
+        names.splice(0, names.length - limit);
+      }
+    }
+  } finally {
+    handle.closeSync();
+  }
+  return names.sort().slice(-limit);
+}
 
 /**
  * Read a bounded journal snapshot for the local control center.
@@ -74,10 +102,7 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
     // lstat is deliberate here: stat would resolve the link and accept its target.
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return [];
-    files = readdirSync(dir)
-      .filter(name => name.endsWith('.json'))
-      .sort()
-      .slice(-MAX_JOURNAL_FILES);
+    files = readNewestJournalNames(dir, MAX_JOURNAL_FILES);
   } catch {
     return [];
   }
