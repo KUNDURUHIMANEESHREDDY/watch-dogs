@@ -57,6 +57,7 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
   assert.match(gatewaySource, /last-event-id/);
   assert.match(appSource, /addEventListener\('reset'/);
+  assert.match(appSource, /source\.addEventListener\('reset', async \(\) => \{[\s\S]*source\.close\(\);[\s\S]*await refreshSnapshot\(\);[\s\S]*connectEvents\(\);/);
   assert.match(gatewaySource, /res\.writableLength \+ Buffer\.byteLength\(keepalive, 'utf8'\) > MAX_SSE_BUFFER_BYTES/);
   assert.match(gatewaySource, /repairExecution: false/);
   assert.match(appSource, /addEventListener\('finding'/);
