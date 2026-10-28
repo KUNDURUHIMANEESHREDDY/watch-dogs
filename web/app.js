@@ -350,6 +350,10 @@ function connectEvents() {
   source.addEventListener('connected', () => {
     $('activity-subtitle').textContent = 'Live persisted finding stream connected  -  repair execution remains disabled';
   });
+  source.addEventListener('reset', () => {
+    void refreshSnapshot();
+    $('activity-subtitle').textContent = 'Event history unavailable  -  refreshing authenticated snapshot';
+  });
   source.addEventListener('finding', event => {
     let envelope;
     try { envelope = JSON.parse(event.data); } catch { return; }
