@@ -31,10 +31,10 @@ export function readBoundedJsonlLines(
   }
 
   const linkStat = lstatSync(path);
-  if (!linkStat.isFile() || linkStat.isSymbolicLink() || linkStat.size > maxBytes) return [];
+  if (!linkStat.isFile() || linkStat.isSymbolicLink()) return [];
 
   // O_NOFOLLOW closes the lstat/open symlink race on platforms that support it.
-  // The post-open identity check below also rejects regular-file path swaps.
+  // The descriptor identity check below also rejects regular-file path swaps.
   const flags = process.platform === 'win32'
     ? 'r'
     : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
@@ -42,11 +42,17 @@ export function readBoundedJsonlLines(
 
   try {
     const openedStat = fstatSync(fd);
-    // The pathname can be replaced by a larger regular file between lstat and
-    // open. Check the descriptor's size before allocating its read buffer; the
-    // earlier lstat bound alone is not sufficient against that race.
-    if (!openedStat.isFile() || openedStat.size > maxBytes) return [];
+    // Reject a regular-file replacement between the initial lstat and open.
+    // Large append-only files are valid: the actual read buffer below is still
+    // capped to maxBytes + 1 so it can return a bounded tail.
+    if (
+      !openedStat.isFile()
+      || openedStat.dev !== linkStat.dev
+      || openedStat.ino !== linkStat.ino
+    ) return [];
 
+    // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms, but
+    // a path can still change after open. Verify it still names this descriptor.
     let currentStat;
     try {
       currentStat = lstatSync(path);
