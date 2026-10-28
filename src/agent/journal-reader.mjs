@@ -52,9 +52,10 @@ function readBoundedRegularFile(path, maxBytes) {
   const initial = lstatSync(path);
   if (!initial.isFile() || initial.isSymbolicLink() || initial.size > maxBytes) return null;
 
-  // O_NOFOLLOW prevents a journal path from being swapped to a symlink between
-  // validation and open on supported POSIX platforms. Windows uses a normal
-  // open and must always take the post-open path/device/inode verification path.
+  // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms.
+  // Verify device/inode identity on every platform as well: O_NOFOLLOW does not
+  // prevent the pathname from being replaced with a different regular file
+  // between lstat and open. Once identity is checked, reads use the open fd.
   const supportsNoFollowOpen = process.platform !== 'win32' && Boolean(constants.O_NOFOLLOW);
   const flags = supportsNoFollowOpen
     ? constants.O_RDONLY | constants.O_NOFOLLOW
@@ -63,20 +64,18 @@ function readBoundedRegularFile(path, maxBytes) {
   try {
     const opened = fstatSync(fd);
     if (!opened.isFile() || opened.size > maxBytes) return null;
-    if (!supportsNoFollowOpen) {
-      let current;
-      try {
-        current = lstatSync(path);
-      } catch {
-        return null;
-      }
-      if (
-        current.isSymbolicLink()
-        || !current.isFile()
-        || current.dev !== opened.dev
-        || current.ino !== opened.ino
-      ) return null;
+    let current;
+    try {
+      current = lstatSync(path);
+    } catch {
+      return null;
     }
+    if (
+      current.isSymbolicLink()
+      || !current.isFile()
+      || current.dev !== opened.dev
+      || current.ino !== opened.ino
+    ) return null;
 
     const buffer = Buffer.alloc(opened.size);
     let offset = 0;
