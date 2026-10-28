@@ -53,6 +53,8 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /liveFindingEvents: true/);
+  assert.match(gatewaySource, /const keepalive = ': keepalive\\n\\n';/);
+  assert.match(gatewaySource, /res\.writableLength \+ Buffer\.byteLength\(keepalive, 'utf8'\) > MAX_SSE_BUFFER_BYTES/);
   assert.match(gatewaySource, /repairExecution: false/);
   assert.match(appSource, /addEventListener\('finding'/);
 });
