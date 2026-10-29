@@ -207,13 +207,36 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   assert.match(replayText, /event: finding/);
   assert.match(replayText, /TEST_LIVE_FINDING_REPLAY/);
 
+  // Evict the first cursor from the bounded history using more than 128
+  // distinct persisted findings. An actually expired cursor must trigger reset,
+  // not silently skip events that fell out of the ring.
+  const burstRecords = Array.from({ length: 130 }, (_, index) => ({
+    signature: `test-live-finding-overflow-${index}`,
+    ruleId: `TEST_LIVE_FINDING_OVERFLOW_${index}`,
+    title: `Replay overflow regression ${index}`,
+    severity: 'low',
+    confidence: 'high',
+    evidence: 'bounded replay evidence',
+    at: new Date(Date.now() + index + 2).toISOString()
+  }));
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+  );
+  await readSseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_OVERFLOW_129'),
+    8000,
+    'finding burst did not reach the live stream'
+  );
+
   await reader.cancel();
   reader = undefined;
   const resetResponse = await fetch(`${origin}/api/events`, {
-    headers: { origin, cookie, 'last-event-id': '000000000000000000000000' }
+    headers: { origin, cookie, 'last-event-id': firstEventId }
   });
   assert.equal(resetResponse.status, 200);
   reader = resetResponse.body.getReader();
-  const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'expired event history did not request a snapshot refresh');
+  const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
 });
