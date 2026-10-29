@@ -34,8 +34,7 @@ export function readBoundedJsonlLines(
   if (!linkStat.isFile() || linkStat.isSymbolicLink()) return [];
 
   // O_NOFOLLOW closes the lstat/open symlink race on platforms that support it.
-  // Windows uses its normal read flag; the lstat and opened-file checks still
-  // reject non-regular files there.
+  // The descriptor identity check below also rejects regular-file path swaps.
   const flags = process.platform === 'win32'
     ? 'r'
     : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
@@ -43,25 +42,29 @@ export function readBoundedJsonlLines(
 
   try {
     const openedStat = fstatSync(fd);
-    if (!openedStat.isFile()) return [];
+    // Reject a regular-file replacement between the initial lstat and open.
+    // Large append-only files are valid: the actual read buffer below is still
+    // capped to maxBytes + 1 so it can return a bounded tail.
+    if (
+      !openedStat.isFile()
+      || openedStat.dev !== linkStat.dev
+      || openedStat.ino !== linkStat.ino
+    ) return [];
 
-    // On platforms without O_NOFOLLOW, validate that the pathname still names
-    // the file opened above. This closes the lstat/open symlink-swap window:
-    // after this check, reads use the already-open descriptor, not the path.
-    if (!constants.O_NOFOLLOW) {
-      let currentStat;
-      try {
-        currentStat = lstatSync(path);
-      } catch {
-        return [];
-      }
-      if (
-        currentStat.isSymbolicLink()
-        || !currentStat.isFile()
-        || currentStat.dev !== openedStat.dev
-        || currentStat.ino !== openedStat.ino
-      ) return [];
+    // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms, but
+    // a path can still change after open. Verify it still names this descriptor.
+    let currentStat;
+    try {
+      currentStat = lstatSync(path);
+    } catch {
+      return [];
     }
+    if (
+      currentStat.isSymbolicLink()
+      || !currentStat.isFile()
+      || currentStat.dev !== openedStat.dev
+      || currentStat.ino !== openedStat.ino
+    ) return [];
 
     // Keep one extra byte so we can distinguish a tail beginning exactly on a
     // newline from one beginning in the middle of a record.

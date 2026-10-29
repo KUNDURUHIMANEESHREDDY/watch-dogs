@@ -4,14 +4,42 @@ import {
   fstatSync,
   lstatSync,
   openSync,
+  opendirSync,
   readSync,
-  readdirSync,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_JOURNAL_FILES = 200;
 const MAX_JOURNAL_ENTRY_BYTES = 256 * 1024;
 const MAX_JOURNAL_RESULTS = 100;
+
+/**
+ * Enumerate only a bounded working set of the newest journal filenames.
+ *
+ * Directory iteration itself is streaming. Sorting the complete directory
+ * with readdirSync would allocate an array proportional to the lifetime of
+ * the journal, even though the UI only needs a bounded recent snapshot.
+ */
+function readNewestJournalNames(dir, limit) {
+  const handle = opendirSync(dir);
+  const names = [];
+  try {
+    let entry;
+    while ((entry = handle.readSync()) !== null) {
+      if (!entry.name.endsWith('.json')) continue;
+      names.push(entry.name);
+      // Keep at most 2 * limit names between trims; memory stays bounded even
+      // when the journal directory contains a very large number of entries.
+      if (names.length >= limit * 2) {
+        names.sort();
+        names.splice(0, names.length - limit);
+      }
+    }
+  } finally {
+    handle.closeSync();
+  }
+  return names.sort().slice(-limit);
+}
 
 /**
  * Read a bounded journal snapshot for the local control center.
@@ -24,9 +52,10 @@ function readBoundedRegularFile(path, maxBytes) {
   const initial = lstatSync(path);
   if (!initial.isFile() || initial.isSymbolicLink() || initial.size > maxBytes) return null;
 
-  // O_NOFOLLOW prevents a journal path from being swapped to a symlink between
-  // validation and open on supported POSIX platforms. Windows uses a normal
-  // open and must always take the post-open path/device/inode verification path.
+  // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms.
+  // Verify device/inode identity on every platform as well: O_NOFOLLOW does not
+  // prevent the pathname from being replaced with a different regular file
+  // between lstat and open. Once identity is checked, reads use the open fd.
   const supportsNoFollowOpen = process.platform !== 'win32' && Boolean(constants.O_NOFOLLOW);
   const flags = supportsNoFollowOpen
     ? constants.O_RDONLY | constants.O_NOFOLLOW
@@ -35,20 +64,18 @@ function readBoundedRegularFile(path, maxBytes) {
   try {
     const opened = fstatSync(fd);
     if (!opened.isFile() || opened.size > maxBytes) return null;
-    if (!supportsNoFollowOpen) {
-      let current;
-      try {
-        current = lstatSync(path);
-      } catch {
-        return null;
-      }
-      if (
-        current.isSymbolicLink()
-        || !current.isFile()
-        || current.dev !== opened.dev
-        || current.ino !== opened.ino
-      ) return null;
+    let current;
+    try {
+      current = lstatSync(path);
+    } catch {
+      return null;
     }
+    if (
+      current.isSymbolicLink()
+      || !current.isFile()
+      || current.dev !== opened.dev
+      || current.ino !== opened.ino
+    ) return null;
 
     const buffer = Buffer.alloc(opened.size);
     let offset = 0;
@@ -74,10 +101,7 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
     // lstat is deliberate here: stat would resolve the link and accept its target.
     const dirStat = lstatSync(dir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return [];
-    files = readdirSync(dir)
-      .filter(name => name.endsWith('.json'))
-      .sort()
-      .slice(-MAX_JOURNAL_FILES);
+    files = readNewestJournalNames(dir, MAX_JOURNAL_FILES);
   } catch {
     return [];
   }

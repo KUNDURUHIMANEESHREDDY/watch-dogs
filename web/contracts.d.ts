@@ -72,6 +72,8 @@ export interface FindingRecord {
   severity?: 'low' | 'medium' | 'high' | 'critical' | string;
   state?: string;
   evidence?: string;
+  /** True when evidence was truncated to the gateway's 4 KiB safety limit. */
+  evidenceTruncated?: boolean;
   resourceIds?: string[];
   timestamp?: string;
   at?: string | null;
@@ -162,7 +164,7 @@ export interface WatchDogsEvent<T = unknown> {
  * Current authenticated endpoints:
  * GET /api/health
  * GET /api/snapshot
- * GET /api/events (SSE connection + keepalive; finding events are not wired)
+ * GET /api/events (SSE connection + keepalive + persisted finding changes)
  * POST /api/session/logout
  *
  * No browser-triggered repair endpoint is operational. The existing gateway

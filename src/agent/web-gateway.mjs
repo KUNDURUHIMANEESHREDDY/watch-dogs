@@ -16,6 +16,9 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
 const MAX_SSE_CLIENTS = 32;
+const MAX_SSE_BUFFER_BYTES = 256 * 1024;
+const MAX_SSE_EVENT_BYTES = 16 * 1024;
+const MAX_FINDING_EVIDENCE_CHARS = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
@@ -74,6 +77,12 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
+function boundedText(value, maxLength) {
+  if (typeof value === 'string') return value.slice(0, maxLength);
+  if (value == null) return null;
+  return String(value).slice(0, maxLength);
+}
+
 function readFindings(limit = 200) {
   const base = join(cfg.paths.data, 'findings.jsonl');
   const records = [];
@@ -105,20 +114,21 @@ function readFindings(limit = 200) {
     .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
     .slice(-limit)
     .map(record => ({
-      id: String(record.signature || `${record.ruleId}::${record.at || ''}`),
-      ruleId: record.ruleId,
-      title: record.title || record.ruleId,
-      severity: record.severity || 'unknown',
-      confidence: record.confidence || 'unknown',
-      evidence: record.evidence,
-      at: record.at || null,
-      shell: record.shell || null,
-      cwd: record.cwd || null,
-      sessionId: record.sessionId || null,
-      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: record.advisor.verdict || null, requiresHuman: Boolean(record.advisor.requiresHuman), why: typeof record.advisor.why === 'string' ? record.advisor.why.slice(0, 240) : null, verification: record.advisor.verification ? { verdict: record.advisor.verification.verdict || 'unknown', evidence: record.advisor.verification.evidence || 'unknown', why: typeof record.advisor.verification.why === 'string' ? record.advisor.verification.why.slice(0, 240) : null } : null } : null,
-      applied: record.applied ? { status: record.applied.status || 'unknown', summary: typeof record.applied.summary === 'string' ? record.applied.summary.slice(0, 240) : null } : null,
+      id: boundedText(record.signature || `${record.ruleId}::${record.at || ''}`, 256),
+      ruleId: boundedText(record.ruleId, 128),
+      title: boundedText(record.title || record.ruleId, 256),
+      severity: boundedText(record.severity || 'unknown', 32),
+      confidence: boundedText(record.confidence || 'unknown', 32),
+      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_CHARS),
+      evidenceTruncated: typeof record.evidence === 'string' && record.evidence.length > MAX_FINDING_EVIDENCE_CHARS,
+      at: boundedText(record.at, 64),
+      shell: boundedText(record.shell, 128),
+      cwd: boundedText(record.cwd, 1024),
+      sessionId: boundedText(record.sessionId, 256),
+      advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: boundedText(record.advisor.verdict, 64), requiresHuman: Boolean(record.advisor.requiresHuman), why: boundedText(record.advisor.why, 240), verification: record.advisor.verification ? { verdict: boundedText(record.advisor.verification.verdict || 'unknown', 64), evidence: boundedText(record.advisor.verification.evidence || 'unknown', 128), why: boundedText(record.advisor.verification.why, 240) } : null } : null,
+      applied: record.applied ? { status: boundedText(record.applied.status || 'unknown', 64), summary: boundedText(record.applied.summary, 240) } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
-      suppressed: record.suppressed || null
+      suppressed: typeof record.suppressed === 'string' ? record.suppressed.slice(0, 240) : record.suppressed ? '[suppressed]' : null
     }));
 }
 function snapshot() {
@@ -155,18 +165,73 @@ function snapshot() {
       health: true, snapshot: true, eventStream: true,
       findingsSnapshot: true,
       journalSnapshot: true,
-      liveFindingEvents: false,
+      liveFindingEvents: true,
       repairExecution: false,
-      note: 'The gateway exposes real health, heartbeat, daemon logs, and persisted findings. Live finding events and repair execution are not wired and are not simulated.'
+      note: 'The gateway streams newly persisted or updated finding records over the authenticated event stream. In-memory watcher events before persistence and browser-triggered repair execution are not connected.'
     }
   };
 }
 function publish(type, data) {
   const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
+  const payload = `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
   for (const res of clients) {
-    try { res.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`); } catch { clients.delete(res); }
+    if (res.destroyed || res.writableEnded) {
+      clients.delete(res);
+      continue;
+    }
+    // Slow readers must not accumulate unbounded event buffers. Closing the
+    // stream lets EventSource reconnect; snapshot polling is the recovery path.
+    if (payloadBytes > MAX_SSE_EVENT_BYTES || res.writableLength + payloadBytes > MAX_SSE_BUFFER_BYTES) {
+      clients.delete(res);
+      res.destroy();
+      continue;
+    }
+    try {
+      res.write(payload);
+      if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
+        clients.delete(res);
+        res.destroy();
+      }
+    } catch {
+      clients.delete(res);
+      res.destroy();
+    }
   }
 }
+
+function findingsFileState() {
+  const base = join(cfg.paths.data, 'findings.jsonl');
+  return [base + '.1', base].map(path => {
+    try {
+      const stat = statSync(path);
+      return `${path}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return `${path}:missing`;
+    }
+  }).join('|');
+}
+
+// Seed from the current persisted snapshot so connecting clients receive changes,
+// not a replay of every historical finding. The map is bounded by readFindings()
+// to the latest 200 sanitized records.
+let observedFindingsState = findingsFileState();
+let knownFindingRecords = new Map(readFindings().map(record => [record.id, JSON.stringify(record)]));
+const findingEventPoll = setInterval(() => {
+  const nextState = findingsFileState();
+  if (nextState === observedFindingsState) return;
+  observedFindingsState = nextState;
+
+  const current = readFindings();
+  const nextRecords = new Map();
+  for (const record of current) {
+    const fingerprint = JSON.stringify(record);
+    nextRecords.set(record.id, fingerprint);
+    if (knownFindingRecords.get(record.id) !== fingerprint) publish('finding', record);
+  }
+  knownFindingRecords = nextRecords;
+}, 1000);
+findingEventPoll.unref?.();
 const MIME = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.svg':'image/svg+xml', '.ico':'image/x-icon' };
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${HOST}:${PORT}`);
@@ -204,11 +269,31 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type':'text/event-stream; charset=utf-8', 'Cache-Control':'no-store', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
       res.write(`event: connected\ndata: ${JSON.stringify({ protocol:'watchdogs.local.v1', type:'connected', timestamp:new Date().toISOString() })}\n\n`);
       clients.add(res);
-      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { cleanup(); } }, 15000);
+      const keepalive = ': keepalive\n\n';
       const cleanup = () => {
         clearInterval(heartbeat);
         clients.delete(res);
       };
+      const heartbeat = setInterval(() => {
+        // Bound heartbeat writes too: a peer that never reads can otherwise
+        // accumulate keepalive bytes even when no findings are published.
+        if (res.destroyed || res.writableEnded ||
+            res.writableLength + Buffer.byteLength(keepalive, 'utf8') > MAX_SSE_BUFFER_BYTES) {
+          cleanup();
+          res.destroy();
+          return;
+        }
+        try {
+          res.write(keepalive);
+          if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
+            cleanup();
+            res.destroy();
+          }
+        } catch {
+          cleanup();
+          res.destroy();
+        }
+      }, 15000);
       // IncomingMessage 'close' fires when the request body completes, which
       // is immediately for GET. The response close event tracks the lifetime
       // of the actual SSE stream and must own cleanup instead.
@@ -258,6 +343,7 @@ server.listen(PORT, HOST, () => {
 });
 server.on('error', err => { console.error('Gateway failed:', err.message); process.exitCode = 1; });
 function shutdown() {
+  clearInterval(findingEventPoll);
   for (const res of clients) { try { res.end(); } catch {} }
   clients.clear();
   server.close(() => process.exit(0));

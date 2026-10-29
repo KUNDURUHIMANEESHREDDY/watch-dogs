@@ -1,11 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  mkdtempSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readBoundedJsonlLines } from '../src/agent/findings-reader.mjs';
@@ -59,11 +56,46 @@ test('findings reader rejects invalid limits and ignores symlinks', (t) => {
       symlinkSync(target, link);
     } catch (error) {
       if (process.platform === 'win32') {
-        t.skip('Creating a symlink is not permitted by this Windows runner.');
+        t.skip('Creating a symlink is not permitted on this Windows runner.');
         return;
       }
       throw error;
     }
     assert.deepEqual(readBoundedJsonlLines(link), []);
+  });
+});
+
+test('findings reader rejects a regular-file replacement between lstat and open', (t) => {
+  withTempDir((dir) => {
+    const path = join(dir, 'findings.jsonl');
+    const originalPath = join(dir, 'findings-original.jsonl');
+    writeFileSync(path, '{"id":"original"}\n');
+
+    let swapped = false;
+    const originalOpenSync = fs.openSync;
+    const openMock = t.mock.method(fs, 'openSync', (candidatePath, flags, mode) => {
+      if (String(candidatePath) === path && !swapped) {
+        swapped = true;
+        renameSync(path, originalPath);
+        writeFileSync(path, JSON.stringify({
+          id: 'replacement',
+          payload: 'small',
+        }) + '\n');
+      }
+      return originalOpenSync(candidatePath, flags, mode);
+    });
+
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(
+        readBoundedJsonlLines(path, { maxBytes: 4096, maxLines: 10 }),
+        [],
+        'descriptor identity must match the file seen by the initial lstat',
+      );
+      assert.equal(swapped, true, 'test must replace the path after initial lstat');
+    } finally {
+      openMock.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 });

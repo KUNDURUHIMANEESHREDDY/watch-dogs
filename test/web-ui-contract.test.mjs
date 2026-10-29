@@ -1,8 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import vm from 'node:vm';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const appSource = await readFile(new URL('../web/app.js', import.meta.url), 'utf8');
@@ -49,5 +52,124 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(journalReaderSource, /MAX_JOURNAL_FILES = 200/);
   assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
+  assert.match(gatewaySource, /liveFindingEvents: true/);
+  assert.match(gatewaySource, /const keepalive = ': keepalive\\n\\n';/);
+  assert.match(gatewaySource, /res\.writableLength \+ Buffer\.byteLength\(keepalive, 'utf8'\) > MAX_SSE_BUFFER_BYTES/);
   assert.match(gatewaySource, /repairExecution: false/);
+  assert.match(appSource, /addEventListener\('finding'/);
+});
+
+async function waitUntil(predicate, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = predicate();
+    if (value) return value;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
+
+async function readSseUntil(reader, predicate, timeoutMs, message) {
+  const deadline = Date.now() + timeoutMs;
+  const decoder = new TextDecoder();
+  let text = '';
+  while (Date.now() < deadline) {
+    let timer;
+    const remaining = Math.max(1, deadline - Date.now());
+    const chunk = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), remaining); })
+    ]).finally(() => clearTimeout(timer));
+    if (chunk.done) throw new Error('SSE stream closed before the expected event');
+    text += decoder.decode(chunk.value, { stream: true });
+    if (predicate(text)) return text;
+  }
+  throw new Error(message);
+}
+
+test('authenticated event stream publishes newly persisted findings', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wd-live-findings-'));
+  const dataDir = join(root, 'data');
+  await mkdir(join(root, '.watchdog'), { recursive: true });
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(join(root, 'package.json'), '{"name":"wd-gateway-events-test"}\n');
+  await writeFile(join(root, '.watchdog', 'config.json'), JSON.stringify({ paths: { data: dataDir } }));
+  await writeFile(join(dataDir, 'findings.jsonl'), '');
+
+  const reservation = createServer();
+  await new Promise((resolve, reject) => {
+    reservation.once('error', reject);
+    reservation.listen(0, '127.0.0.1', resolve);
+  });
+  const port = reservation.address().port;
+  await new Promise((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+
+  const gatewayPath = fileURLToPath(new URL('../src/agent/web-gateway.mjs', import.meta.url));
+  const child = spawn(process.execPath, [gatewayPath], {
+    cwd: root,
+    env: { ...process.env, WD_WEB_PORT: String(port) },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let reader;
+  t.after(async () => {
+    try { await reader?.cancel(); } catch {}
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGTERM');
+      await new Promise(resolve => {
+        const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 4000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+      });
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  let stdout = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  const pairing = await waitUntil(
+    () => /Pairing code \(enter in browser; never share\): ([A-Za-z0-9_-]+)/.exec(stdout),
+    6000,
+    'gateway did not print a pairing code'
+  );
+  const origin = `http://127.0.0.1:${port}`;
+  const session = await fetch(`${origin}/api/session`, {
+    method: 'POST',
+    headers: { origin, 'content-type': 'application/json' },
+    body: JSON.stringify({ pairingCode: pairing[1] })
+  });
+  assert.equal(session.status, 200);
+  const cookie = session.headers.get('set-cookie')?.split(';')[0];
+  assert.ok(cookie, 'gateway should issue an HttpOnly session cookie');
+
+  const snapshotResponse = await fetch(`${origin}/api/snapshot`, { headers: { origin, cookie } });
+  assert.equal(snapshotResponse.status, 200);
+  const snapshot = await snapshotResponse.json();
+  assert.equal(snapshot.capabilities.liveFindingEvents, true);
+  assert.equal(snapshot.capabilities.repairExecution, false);
+
+  const response = await fetch(`${origin}/api/events`, { headers: { origin, cookie } });
+  assert.equal(response.status, 200);
+  reader = response.body.getReader();
+  await readSseUntil(reader, text => text.includes('event: connected'), 5000, 'SSE connection event missing');
+
+  const record = {
+    signature: 'test-live-finding',
+    ruleId: 'TEST_LIVE_FINDING',
+    title: 'Live finding regression',
+    severity: 'high',
+    confidence: 'high',
+    evidence: 'x'.repeat(6000),
+    at: new Date().toISOString()
+  };
+  await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n');
+  const eventText = await readSseUntil(reader, text => text.includes('event: finding'), 5000, 'persisted finding event was not delivered');
+  const match = /event: finding\ndata: ([^\n]+)\n\n/.exec(eventText);
+  assert.ok(match, eventText);
+  const envelope = JSON.parse(match[1]);
+  assert.equal(envelope.protocol, 'watchdogs.local.v1');
+  assert.equal(envelope.type, 'finding');
+  assert.equal(envelope.data.ruleId, 'TEST_LIVE_FINDING');
+  assert.equal(envelope.data.evidence.length, 4096);
+  assert.equal(envelope.data.evidenceTruncated, true);
+  assert.ok(Buffer.byteLength(match[1], 'utf8') < 16 * 1024, 'SSE event payload should remain bounded');
 });

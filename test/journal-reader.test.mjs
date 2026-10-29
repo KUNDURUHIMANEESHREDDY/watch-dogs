@@ -114,3 +114,35 @@ test('journal reader refuses a journal directory that is a symlink', t => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('journal reader keeps newest results after streaming more than five directory batches', () => {
+  const root = mkdtempSync(join(tmpdir(), 'watch-dogs-journal-many-'));
+  const dataDir = join(root, '.watchdog');
+  const journalDir = join(dataDir, 'journal');
+  const projectRoot = join(root, 'project');
+  mkdirSync(journalDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    const base = Date.now();
+    const ids = [];
+    for (let i = 0; i < 1205; i += 1) {
+      const id = `${(base + i).toString(36)}-${i.toString(36)}`;
+      ids.push(id);
+      writeFileSync(join(journalDir, `${id}.json`), JSON.stringify({
+        id,
+        at: new Date(base + i).toISOString(),
+        outcome: 'verified',
+        type: 'patch',
+        abs: join(projectRoot, `file-${i}.js`),
+        why: 'bounded journal fixture'
+      }));
+    }
+
+    const entries = readJournal(dataDir, projectRoot);
+    assert.equal(entries.length, 100);
+    assert.deepEqual(entries.map(entry => entry.id), ids.slice(-100).reverse());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
