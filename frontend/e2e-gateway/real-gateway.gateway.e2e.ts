@@ -233,3 +233,36 @@ test('gateway outage stays distinct from session expiry; restart invalidates old
   await page.getByRole('button', { name: 'Activity history' }).click();
   await expect(page.getByRole('heading', { name: /Activity history/ })).toBeVisible();
 });
+
+
+test('gateway rejects new pairings at capacity without evicting existing sessions', async () => {
+  // Restart to isolate the in-memory session store from preceding browser tests.
+  await stopGateway();
+  const code = await startGateway();
+  const cookies: string[] = [];
+  for (let index = 0; index < 64; index += 1) {
+    const response = await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingCode: code }),
+    });
+    expect(response.status, `pairing ${index + 1} should be accepted`).toBe(200);
+    const cookie = response.headers.get('set-cookie');
+    expect(cookie).toBeTruthy();
+    cookies.push(cookie!.split(';', 1)[0]);
+  }
+
+  const overCapacity = await fetch(`${BASE_URL}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code }),
+  });
+  expect(overCapacity.status).toBe(503);
+  await expect(overCapacity.json()).resolves.toEqual({ error: 'session_capacity_reached' });
+
+  // Capacity rejection must not invalidate the oldest live session.
+  const firstSnapshot = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: cookies[0] },
+  });
+  expect(firstSnapshot.status).toBe(200);
+});
