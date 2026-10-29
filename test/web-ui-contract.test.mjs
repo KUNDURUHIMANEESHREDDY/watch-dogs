@@ -221,7 +221,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   }));
   await writeFile(
     join(dataDir, 'findings.jsonl'),
-    [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+    [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
   await readSseUntil(
     reader,
