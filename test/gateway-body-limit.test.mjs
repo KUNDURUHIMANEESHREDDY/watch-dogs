@@ -54,7 +54,7 @@ test('oversized session request receives deterministic 413 without dropping the 
 
   await new Promise((resolveReady, rejectReady) => {
     const timer = setTimeout(() => {
-      rejectReady(new Error(`gateway did not start on port ${port}: ${output}`));
+      rejectReady(new Error(`gateway did not start on port ${port}`));
     }, 5000);
     child.stdout.on('data', () => {
       if (output.includes(`URL: http://127.0.0.1:${port}`)) {
@@ -68,7 +68,7 @@ test('oversized session request receives deterministic 413 without dropping the 
     });
     child.once('exit', (code, signal) => {
       clearTimeout(timer);
-      rejectReady(new Error(`gateway exited before listening (code=${code}, signal=${signal}): ${output}`));
+      rejectReady(new Error(`gateway exited before listening (code=${code}, signal=${signal})`));
     });
   });
 
