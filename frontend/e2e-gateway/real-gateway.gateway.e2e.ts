@@ -127,6 +127,14 @@ test.afterAll(async () => {
 test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair restores the UI', async ({ page }) => {
   const code = pairingCode!;
   const snapshot = await pairWithGateway(page, code);
+
+  const oversizedResponse = await fetch(`${BASE_URL}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code, padding: 'x'.repeat(10 * 1024) }),
+  });
+  expect(oversizedResponse.status).toBe(413);
+  await expect(oversizedResponse.json()).resolves.toEqual({ error: 'request body too large' });
   console.log(`Real gateway verified: Node ${snapshot.agent.version}, PID ${snapshot.agent.pid}, port ${snapshot.agent.port}.`);
 
   const cookie = (await page.context().cookies(BASE_URL)).find((candidate) => candidate.name === 'wd_session');
@@ -134,6 +142,14 @@ test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair
   expect(cookie!.httpOnly).toBe(true);
   expect(cookie!.sameSite).toBe('Strict');
   expect(await page.evaluate(() => document.cookie)).not.toContain('wd_session=');
+
+  const malformedPath = await fetch(`${BASE_URL}/%E0%A4%A`);
+  expect(malformedPath.status).toBe(404);
+  await expect(malformedPath.json()).resolves.toEqual({ error: 'not_found' });
+  const snapshotAfterMalformedPath = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: `wd_session=${cookie!.value}` },
+  });
+  expect(snapshotAfterMalformedPath.status).toBe(200);
 
   // Revoke from outside the browser app so it retains its cookie and must handle a real 401.
   const revoke = await fetch(`${BASE_URL}/api/session/logout`, {
@@ -181,4 +197,25 @@ test('gateway outage stays distinct from session expiry; restart invalidates old
   expect(recoveredSnapshot.protocol).toBe('watchdogs.local.v1');
   await page.getByRole('button', { name: 'Activity history' }).click();
   await expect(page.getByRole('heading', { name: /Activity history/ })).toBeVisible();
+});
+
+test('gateway caps active sessions instead of retaining unlimited paired sessions', async () => {
+  // Start with an empty in-memory session store so the capacity assertion is
+  // independent of cookies created by the preceding browser tests.
+  await stopGateway();
+  const code = await startGateway();
+  const statuses: number[] = [];
+  for (let index = 0; index < 65; index += 1) {
+    const response = await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingCode: code }),
+    });
+    statuses.push(response.status);
+    if (response.status === 503) break;
+  }
+
+  expect(statuses.filter((status) => status === 200)).toHaveLength(64);
+  expect(statuses.at(-1)).toBe(503);
+  expect(statuses).toHaveLength(65);
 });

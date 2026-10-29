@@ -12,6 +12,7 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
+const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
 const sessions = new Map();
 const clients = new Set();
@@ -28,29 +29,45 @@ const safeEqual = (a, b) => {
 };
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
-    let raw = '';
+    const chunks = [];
+    let bytes = 0;
+    let tooLarge = false;
     req.on('data', chunk => {
-      raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_BODY) {
+      // Stop retaining bytes once the limit is crossed, but keep draining the
+      // request so the handler can return a deterministic HTTP 413 response.
+      if (tooLarge) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('request body too large'), { status: 413 }));
-        req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
     req.on('end', () => {
-      try { resolveBody(raw ? JSON.parse(raw) : {}); }
+      if (tooLarge) return;
+      try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
       catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
     });
-    req.on('error', reject);
+    req.on('error', error => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 function isOriginAllowed(req) {
   const origin = req.headers.origin;
   return !origin || origin === `http://${HOST}:${PORT}`;
 }
+function pruneExpiredSessions(now = Date.now()) {
+  for (const [id, expires] of sessions) {
+    if (expires <= now) sessions.delete(id);
+  }
+}
 function authenticated(req) {
   const id = parseCookies(req.headers.cookie).wd_session;
   const expires = id && sessions.get(id);
-  if (!expires || expires < Date.now()) {
+  if (!expires || expires <= Date.now()) {
     if (id) sessions.delete(id);
     return false;
   }
@@ -200,6 +217,12 @@ const server = createServer(async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: e.message }); }
     if (!safeEqual(body.pairingCode ?? '', pairingCode)) return json(res, 401, { error: 'invalid_pairing_code' });
+    pruneExpiredSessions();
+    // A pairing code is reusable for local recovery, so cap concurrent sessions
+    // rather than allowing repeated pairing to grow this in-memory map forever.
+    if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+      return json(res, 503, { error: 'session_capacity_reached' });
+    }
     const id = randomBytes(32).toString('base64url');
     sessions.set(id, Date.now() + SESSION_TTL);
     return json(res, 200, { ok: true, expiresInSeconds: SESSION_TTL / 1000 }, { 'Set-Cookie': `wd_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}` });
@@ -228,7 +251,14 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error:'not_found' });
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error:'method_not_allowed' });
-  const requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  let requested;
+  try {
+    requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  } catch {
+    // Malformed percent-encoding is a client path error, not a reason to let
+    // an async request handler reject outside the HTTP error boundary.
+    return json(res, 404, { error: 'not_found' });
+  }
   const target = resolve(ROOT, `.${requested}`);
   if (target !== ROOT && !target.startsWith(ROOT + sep)) return json(res, 403, { error:'path_not_allowed' });
   try {
@@ -238,6 +268,11 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch { json(res, 404, { error:'not_found' }); }
 });
+// Bound slow headers and bodies: oversized requests are drained to return 413,
+// but a client must not be able to hold the local gateway open indefinitely.
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 server.listen(PORT, HOST, () => {
   console.log('\nWATCH DOGS LOCAL CONTROL CENTER');
   console.log(`URL: http://${HOST}:${PORT}`);
