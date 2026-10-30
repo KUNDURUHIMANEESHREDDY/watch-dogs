@@ -56,8 +56,8 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.ok(gatewaySource.includes("const keepalive = ': keepalive\\n\\n';"));
   assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
   assert.match(gatewaySource, /const MAX_FINDING_EVIDENCE_BYTES = 4096/);
-  assert.match(gatewaySource, /boundedText\\(record\\.evidence, MAX_FINDING_EVIDENCE_BYTES\\)/);
-  assert.match(gatewaySource, /Buffer\\.byteLength\\(record\\.evidence, 'utf8'\\) > MAX_FINDING_EVIDENCE_BYTES/);
+  assert.match(gatewaySource, /boundedText\(record\.evidence, MAX_FINDING_EVIDENCE_BYTES\)/);
+  assert.match(gatewaySource, /Buffer\.byteLength\(record\.evidence, 'utf8'\) > MAX_FINDING_EVIDENCE_BYTES/);
   assert.match(gatewaySource, /last-event-id/);
   assert.match(appSource, /addEventListener\('reset'/);
   assert.match(appSource, /state\.pollTimer = setInterval\(refreshAndReconnectEvents, 10000\)/);
