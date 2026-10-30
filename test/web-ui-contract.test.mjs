@@ -266,7 +266,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   reader = resetResponse.body.getReader();
   const resetText = await readGatewaySseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
-  const resetEventId = /^id: ([a-f0-9]{24})\\nevent: reset/m.exec(resetText)?.[1];
+  const resetEventId = /^id: ([a-f0-9]{24})\nevent: reset/m.exec(resetText)?.[1];
   assert.ok(resetEventId, 'history reset should advance the standard SSE replay cursor');
 
   const afterResetRecord = {
@@ -280,7 +280,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   };
   await writeFile(
     join(dataDir, 'findings.jsonl'),
-    [record, secondRecord, ...burstRecords, afterResetRecord].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+    [record, secondRecord, ...burstRecords, afterResetRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
   const afterResetLiveText = await readGatewaySseUntil(
     reader,
