@@ -337,11 +337,18 @@ const server = createServer(async (req, res) => {
         if (index < 0) {
           const reset = {
             protocol: 'watchdogs.local.v1',
+            event_id: randomBytes(12).toString('hex'),
             type: 'reset',
             timestamp: new Date().toISOString(),
             data: { reason: 'event_history_unavailable', snapshotRequired: true }
           };
-          if (!writeSsePayload(res, `event: reset\ndata: ${JSON.stringify(reset)}\n\n`)) cleanup();
+          const payload = `id: ${reset.event_id}\nevent: reset\ndata: ${JSON.stringify(reset)}\n\n`;
+          // Advance the replay cursor after an expired/invalid Last-Event-ID.
+          // Without retaining this reset marker, native EventSource clients that
+          // reconnect without custom reset handling would receive reset forever.
+          eventHistory.push({ id: reset.event_id, payload });
+          if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+          if (!writeSsePayload(res, payload)) cleanup();
         } else {
           for (const item of eventHistory.slice(index + 1)) {
             if (!writeSsePayload(res, item.payload)) {
