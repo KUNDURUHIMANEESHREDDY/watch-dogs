@@ -19,7 +19,7 @@ const MAX_SSE_CLIENTS = 32;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_EVENT_BYTES = 16 * 1024;
 const MAX_SSE_HISTORY_EVENTS = 128;
-const MAX_FINDING_EVIDENCE_CHARS = 4096;
+const MAX_FINDING_EVIDENCE_BYTES = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const cfg = loadConfig();
 const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
@@ -78,10 +78,19 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
-function boundedText(value, maxLength) {
-  if (typeof value === 'string') return value.slice(0, maxLength);
+function boundedText(value, maxBytes) {
   if (value == null) return null;
-  return String(value).slice(0, maxLength);
+  const text = typeof value === 'string' ? value : String(value);
+  let result = '';
+  let bytes = 0;
+  // Iterate Unicode code points so a byte limit never splits a surrogate pair.
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > maxBytes) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return result;
 }
 
 function readFindings(limit = 200) {
