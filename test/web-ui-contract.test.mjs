@@ -139,7 +139,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
   const readGatewaySseUntil = async (...args) => {
     try {
-      return await readGatewaySseUntil(...args);
+      return await readSseUntil(...args);
     } catch (error) {
       const message = args[3] || 'SSE read failed';
       throw new Error(
