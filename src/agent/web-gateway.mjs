@@ -129,8 +129,8 @@ function readFindings(limit = 200) {
       title: boundedText(record.title || record.ruleId, 256),
       severity: boundedText(record.severity || 'unknown', 32),
       confidence: boundedText(record.confidence || 'unknown', 32),
-      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_CHARS),
-      evidenceTruncated: typeof record.evidence === 'string' && record.evidence.length > MAX_FINDING_EVIDENCE_CHARS,
+      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_BYTES),
+      evidenceTruncated: typeof record.evidence === 'string' && Buffer.byteLength(record.evidence, 'utf8') > MAX_FINDING_EVIDENCE_BYTES,
       at: boundedText(record.at, 64),
       shell: boundedText(record.shell, 128),
       cwd: boundedText(record.cwd, 1024),
@@ -138,7 +138,7 @@ function readFindings(limit = 200) {
       advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: boundedText(record.advisor.verdict, 64), requiresHuman: Boolean(record.advisor.requiresHuman), why: boundedText(record.advisor.why, 240), verification: record.advisor.verification ? { verdict: boundedText(record.advisor.verification.verdict || 'unknown', 64), evidence: boundedText(record.advisor.verification.evidence || 'unknown', 128), why: boundedText(record.advisor.verification.why, 240) } : null } : null,
       applied: record.applied ? { status: boundedText(record.applied.status || 'unknown', 64), summary: boundedText(record.applied.summary, 240) } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
-      suppressed: typeof record.suppressed === 'string' ? record.suppressed.slice(0, 240) : record.suppressed ? '[suppressed]' : null
+      suppressed: typeof record.suppressed === 'string' ? boundedText(record.suppressed, 240) : record.suppressed ? '[suppressed]' : null
     }));
 }
 function snapshot() {
