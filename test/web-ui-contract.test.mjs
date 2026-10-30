@@ -266,6 +266,45 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   reader = resetResponse.body.getReader();
   const resetText = await readGatewaySseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
+  const resetEventId = /^id: ([a-f0-9]{24})\\nevent: reset/m.exec(resetText)?.[1];
+  assert.ok(resetEventId, 'history reset should advance the standard SSE replay cursor');
+
+  const afterResetRecord = {
+    signature: 'test-live-finding-after-reset',
+    ruleId: 'TEST_LIVE_FINDING_AFTER_RESET',
+    title: 'Finding after replay reset',
+    severity: 'low',
+    confidence: 'high',
+    evidence: 'post-reset replay evidence',
+    at: new Date(Date.now() + 500).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, afterResetRecord].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+  );
+  const afterResetLiveText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_AFTER_RESET'),
+    5000,
+    'finding after reset was not delivered'
+  );
+  assert.match(afterResetLiveText, /event: finding/);
+
+  await reader.cancel();
+  reader = undefined;
+  const afterResetReplayResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': resetEventId }
+  });
+  assert.equal(afterResetReplayResponse.status, 200);
+  reader = afterResetReplayResponse.body.getReader();
+  const afterResetReplayText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_AFTER_RESET'),
+    5000,
+    'reset cursor was not retained for subsequent event replay'
+  );
+  assert.match(afterResetReplayText, /event: finding/);
+  assert.ok(!afterResetReplayText.includes('event: reset'), 'recognized reset cursor must not trigger another reset');
 
   // A reset requires a fresh authenticated snapshot before the client opens
   // another stream. Use a new connection for subsequent live-event checks.
