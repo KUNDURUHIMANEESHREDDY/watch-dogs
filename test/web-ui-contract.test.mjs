@@ -53,7 +53,7 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /liveFindingEvents: true/);
-  assert.match(gatewaySource, /const keepalive = ': keepalive\n\n';/);
+  assert.ok(gatewaySource.includes("const keepalive = ': keepalive\\n\\n';"));
   assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
   assert.match(gatewaySource, /last-event-id/);
   assert.match(appSource, /addEventListener\('reset'/);
@@ -246,35 +246,64 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
 
-  // A finding can be within the character cap but exceed the byte cap when
-  // evidence contains multi-byte UTF-8. It must produce a replayable reset,
-  // not disconnect the client and silently omit the event from history.
-  const oversizedRecord = {
-    signature: 'test-live-finding-oversized-utf8',
-    ruleId: 'TEST_LIVE_FINDING_OVERSIZED_UTF8',
-    title: 'Oversized UTF-8 finding regression',
+  // Multibyte evidence is bounded by UTF-8 bytes, not UTF-16 code units.
+  const multibyteRecord = {
+    signature: 'test-live-finding-multibyte-utf8',
+    ruleId: 'TEST_LIVE_FINDING_MULTIBYTE_UTF8',
+    title: 'Multibyte UTF-8 finding regression',
     severity: 'high',
     confidence: 'high',
-    evidence: '😀'.repeat(4096),
+    evidence: String.fromCodePoint(0x1f600).repeat(4096),
     at: new Date(Date.now() + 1000).toISOString()
   };
   await writeFile(
     join(dataDir, 'findings.jsonl'),
-    [record, secondRecord, ...burstRecords, oversizedRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
+    [record, secondRecord, ...burstRecords, multibyteRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
+  );
+  const multibyteText = await readSseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_MULTIBYTE_UTF8'),
+    5000,
+    'multibyte finding was not delivered'
+  );
+  const multibyteMatch = /event: finding\ndata: ([^\n]+)\n\n/.exec(multibyteText);
+  assert.ok(multibyteMatch, multibyteText);
+  const multibyteEnvelope = JSON.parse(multibyteMatch[1]);
+  assert.equal(multibyteEnvelope.data.ruleId, 'TEST_LIVE_FINDING_MULTIBYTE_UTF8');
+  assert.equal(Buffer.byteLength(multibyteEnvelope.data.evidence, 'utf8'), 4096);
+  assert.equal(multibyteEnvelope.data.evidenceTruncated, true);
+  assert.ok(Buffer.byteLength(multibyteMatch[1], 'utf8') < 16 * 1024, 'multibyte SSE payload should remain bounded');
+  const multibyteEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(multibyteText)?.[1];
+  assert.ok(multibyteEventId, 'multibyte finding should expose a replay cursor');
+
+  // JSON escaping can expand control characters beyond the SSE frame limit.
+  // The gateway must publish a bounded reset marker instead of dropping state.
+  const escapedRecord = {
+    signature: 'test-live-finding-escaped-utf8',
+    ruleId: 'TEST_LIVE_FINDING_ESCAPED_UTF8',
+    title: 'Escaped control-character finding regression',
+    severity: 'high',
+    confidence: 'high',
+    evidence: String.fromCharCode(0).repeat(4096),
+    at: new Date(Date.now() + 2000).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, multibyteRecord, escapedRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
   const liveOversizeReset = await readSseUntil(
     reader,
     text => text.includes('"reason":"event_too_large"'),
     5000,
-    'oversized finding did not request a snapshot refresh'
+    'oversized serialized finding did not request a snapshot refresh'
   );
   assert.match(liveOversizeReset, /event: reset/);
   assert.match(liveOversizeReset, /id: [a-f0-9]{24}/);
 
   await reader.cancel();
   reader = undefined;
-  const replayResetResponse = await fetch(`${origin}/api/events`, {
-    headers: { origin, cookie, 'last-event-id': lastBurstEventId }
+  const replayResetResponse = await fetch(origin + '/api/events', {
+    headers: { origin, cookie, 'last-event-id': multibyteEventId }
   });
   assert.equal(replayResetResponse.status, 200);
   reader = replayResetResponse.body.getReader();
