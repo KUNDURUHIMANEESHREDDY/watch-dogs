@@ -223,12 +223,18 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     join(dataDir, 'findings.jsonl'),
     [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
-  await readSseUntil(
+  const burstText = await readSseUntil(
     reader,
     text => text.includes('TEST_LIVE_FINDING_OVERFLOW_129'),
     8000,
     'finding burst did not reach the live stream'
   );
+  let lastBurstEventId;
+  for (const match of burstText.matchAll(/id: ([a-f0-9]{24})\\nevent: finding\\ndata: ([^\\n]+)\\n\\n/g)) {
+    const envelope = JSON.parse(match[2]);
+    if (envelope.data?.ruleId === 'TEST_LIVE_FINDING_OVERFLOW_129') lastBurstEventId = match[1];
+  }
+  assert.ok(lastBurstEventId, 'latest burst event should expose a replay cursor');
 
   await reader.cancel();
   reader = undefined;
@@ -239,4 +245,45 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   reader = resetResponse.body.getReader();
   const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
+
+  // A finding can be within the character cap but exceed the byte cap when
+  // evidence contains multi-byte UTF-8. It must produce a replayable reset,
+  // not disconnect the client and silently omit the event from history.
+  const oversizedRecord = {
+    signature: 'test-live-finding-oversized-utf8',
+    ruleId: 'TEST_LIVE_FINDING_OVERSIZED_UTF8',
+    title: 'Oversized UTF-8 finding regression',
+    severity: 'high',
+    confidence: 'high',
+    evidence: '😀'.repeat(4096),
+    at: new Date(Date.now() + 1000).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, oversizedRecord].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+  );
+  const liveOversizeReset = await readSseUntil(
+    reader,
+    text => text.includes('"reason":"event_too_large"'),
+    5000,
+    'oversized finding did not request a snapshot refresh'
+  );
+  assert.match(liveOversizeReset, /event: reset/);
+  assert.match(liveOversizeReset, /id: [a-f0-9]{24}/);
+
+  await reader.cancel();
+  reader = undefined;
+  const replayResetResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': lastBurstEventId }
+  });
+  assert.equal(replayResetResponse.status, 200);
+  reader = replayResetResponse.body.getReader();
+  const replayResetText = await readSseUntil(
+    reader,
+    text => text.includes('"reason":"event_too_large"'),
+    5000,
+    'oversized-event reset marker was not replayed after reconnect'
+  );
+  assert.match(replayResetText, /event: reset/);
+  assert.ok(replayResetText.includes('"snapshotRequired":true'));
 });
