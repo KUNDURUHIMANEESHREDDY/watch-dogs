@@ -130,8 +130,26 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
 
   let stdout = '';
+  let stderr = '';
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', chunk => {
+    stderr = (stderr + chunk).slice(-8192);
+  });
+  const readGatewaySseUntil = async (...args) => {
+    try {
+      return await readGatewaySseUntil(...args);
+    } catch (error) {
+      const message = args[3] || 'SSE read failed';
+      throw new Error(
+        message + ': ' + (error?.message || String(error)) +
+        '; childExitCode=' + (child.exitCode ?? 'running') +
+        '; childSignal=' + (child.signalCode ?? 'none') +
+        '; gatewayStderr=' + stderr.slice(-2000)
+      );
+    }
+  };
   const pairing = await waitUntil(
     () => /Pairing code \(enter in browser; never share\): ([A-Za-z0-9_-]+)/.exec(stdout),
     6000,
@@ -156,7 +174,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   const response = await fetch(`${origin}/api/events`, { headers: { origin, cookie } });
   assert.equal(response.status, 200);
   reader = response.body.getReader();
-  await readSseUntil(reader, text => text.includes('event: connected'), 5000, 'SSE connection event missing');
+  await readGatewaySseUntil(reader, text => text.includes('event: connected'), 5000, 'SSE connection event missing');
 
   const record = {
     signature: 'test-live-finding',
@@ -168,7 +186,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     at: new Date().toISOString()
   };
   await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n');
-  const eventText = await readSseUntil(reader, text => text.includes('event: finding'), 5000, 'persisted finding event was not delivered');
+  const eventText = await readGatewaySseUntil(reader, text => text.includes('event: finding'), 5000, 'persisted finding event was not delivered');
   const match = /event: finding\ndata: ([^\n]+)\n\n/.exec(eventText);
   assert.ok(match, eventText);
   const envelope = JSON.parse(match[1]);
@@ -191,7 +209,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     at: new Date(Date.now() + 1).toISOString()
   };
   await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n' + JSON.stringify(secondRecord) + '\n');
-  const secondText = await readSseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'second persisted finding event was not delivered');
+  const secondText = await readGatewaySseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'second persisted finding event was not delivered');
   const secondEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(secondText)?.[1];
   assert.ok(secondEventId, 'second finding should expose an SSE id');
   await reader.cancel();
@@ -202,7 +220,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
   assert.equal(replayResponse.status, 200);
   reader = replayResponse.body.getReader();
-  const replayText = await readSseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'missed finding was not replayed');
+  const replayText = await readGatewaySseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'missed finding was not replayed');
   assert.match(replayText, /event: connected/);
   assert.match(replayText, /event: finding/);
   assert.match(replayText, /TEST_LIVE_FINDING_REPLAY/);
@@ -223,7 +241,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     join(dataDir, 'findings.jsonl'),
     [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
-  const burstText = await readSseUntil(
+  const burstText = await readGatewaySseUntil(
     reader,
     text => text.includes('TEST_LIVE_FINDING_OVERFLOW_129'),
     8000,
@@ -243,7 +261,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
   assert.equal(resetResponse.status, 200);
   reader = resetResponse.body.getReader();
-  const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
+  const resetText = await readGatewaySseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
 
   // A reset requires a fresh authenticated snapshot before the client opens
@@ -253,7 +271,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   const liveResponse = await fetch(origin + '/api/events', { headers: { origin, cookie } });
   assert.equal(liveResponse.status, 200);
   reader = liveResponse.body.getReader();
-  await readSseUntil(reader, text => text.includes('event: connected'), 5000, 'fresh SSE connection event missing');
+  await readGatewaySseUntil(reader, text => text.includes('event: connected'), 5000, 'fresh SSE connection event missing');
 
   // Multibyte evidence is bounded by UTF-8 bytes, not UTF-16 code units.
   const multibyteRecord = {
@@ -269,7 +287,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     join(dataDir, 'findings.jsonl'),
     [record, secondRecord, ...burstRecords, multibyteRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
-  const multibyteText = await readSseUntil(
+  const multibyteText = await readGatewaySseUntil(
     reader,
     text => text.includes('TEST_LIVE_FINDING_MULTIBYTE_UTF8'),
     5000,
@@ -300,7 +318,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     join(dataDir, 'findings.jsonl'),
     [record, secondRecord, ...burstRecords, multibyteRecord, escapedRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
-  const liveOversizeReset = await readSseUntil(
+  const liveOversizeReset = await readGatewaySseUntil(
     reader,
     text => text.includes('"reason":"event_too_large"'),
     5000,
@@ -316,7 +334,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
   assert.equal(replayResetResponse.status, 200);
   reader = replayResetResponse.body.getReader();
-  const replayResetText = await readSseUntil(
+  const replayResetText = await readGatewaySseUntil(
     reader,
     text => text.includes('"reason":"event_too_large"'),
     5000,
