@@ -53,7 +53,7 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /liveFindingEvents: true/);
-  assert.match(gatewaySource, /const keepalive = ': keepalive\\n\\n';/);
+  assert.match(gatewaySource, /const keepalive = ': keepalive\n\n';/);
   assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
   assert.match(gatewaySource, /last-event-id/);
   assert.match(appSource, /addEventListener\('reset'/);
@@ -230,7 +230,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     'finding burst did not reach the live stream'
   );
   let lastBurstEventId;
-  for (const match of burstText.matchAll(/id: ([a-f0-9]{24})\\nevent: finding\\ndata: ([^\\n]+)\\n\\n/g)) {
+  for (const match of burstText.matchAll(/id: ([a-f0-9]{24})\nevent: finding\ndata: ([^\n]+)\n\n/g)) {
     const envelope = JSON.parse(match[2]);
     if (envelope.data?.ruleId === 'TEST_LIVE_FINDING_OVERFLOW_129') lastBurstEventId = match[1];
   }
@@ -260,7 +260,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   };
   await writeFile(
     join(dataDir, 'findings.jsonl'),
-    [record, secondRecord, ...burstRecords, oversizedRecord].map(item => JSON.stringify(item)).join('\\n') + '\\n'
+    [record, secondRecord, ...burstRecords, oversizedRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
   );
   const liveOversizeReset = await readSseUntil(
     reader,
