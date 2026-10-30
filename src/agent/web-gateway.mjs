@@ -197,13 +197,25 @@ function writeSsePayload(res, payload) {
 }
 
 function publish(type, data) {
-  const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
+  let event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
   // Standard SSE IDs let EventSource send Last-Event-ID after a reconnect.
-  const payload = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
-  if (Buffer.byteLength(payload, 'utf8') <= MAX_SSE_EVENT_BYTES) {
-    eventHistory.push({ id: event.event_id, payload });
-    if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+  let payload = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+  if (Buffer.byteLength(payload, 'utf8') > MAX_SSE_EVENT_BYTES) {
+    // A dropped oversized event is a replay gap: retaining the previous cursor
+    // would make reconnect replay appear complete even though state was lost.
+    // Publish and retain a small reset marker so live and reconnecting clients
+    // refresh their authenticated snapshot instead of silently missing a finding.
+    event = {
+      protocol: 'watchdogs.local.v1',
+      event_id: randomBytes(12).toString('hex'),
+      type: 'reset',
+      timestamp: new Date().toISOString(),
+      data: { reason: 'event_too_large', snapshotRequired: true }
+    };
+    payload = `id: ${event.event_id}\nevent: reset\ndata: ${JSON.stringify(event)}\n\n`;
   }
+  eventHistory.push({ id: event.event_id, payload });
+  if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
   for (const res of clients) {
     if (!writeSsePayload(res, payload)) clients.delete(res);
   }
