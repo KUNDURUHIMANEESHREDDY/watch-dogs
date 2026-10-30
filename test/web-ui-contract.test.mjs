@@ -53,7 +53,16 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /liveFindingEvents: true/);
-  assert.match(gatewaySource, /const keepalive = ': keepalive\\n\\n';/);
+  assert.ok(gatewaySource.includes("const keepalive = ': keepalive\\n\\n';"));
+  assert.match(gatewaySource, /MAX_SSE_HISTORY_EVENTS = 128/);
+  assert.match(gatewaySource, /const MAX_FINDING_EVIDENCE_BYTES = 4096/);
+  assert.match(gatewaySource, /boundedText\(record\.evidence, MAX_FINDING_EVIDENCE_BYTES\)/);
+  assert.match(gatewaySource, /Buffer\.byteLength\(record\.evidence, 'utf8'\) > MAX_FINDING_EVIDENCE_BYTES/);
+  assert.match(gatewaySource, /last-event-id/);
+  assert.match(appSource, /addEventListener\('reset'/);
+  assert.match(appSource, /state\.pollTimer = setInterval\(refreshAndReconnectEvents, 10000\)/);
+  assert.match(appSource, /async function refreshAndReconnectEvents\(\) \{[\s\S]*await refreshSnapshot\(\);[\s\S]*if \(state\.snapshot && !state\.lastError && !state\.eventSource\) connectEvents\(\);/);
+  assert.match(appSource, /source\.addEventListener\('reset', async \(\) => \{[\s\S]*source\.close\(\);[\s\S]*await refreshAndReconnectEvents\(\);/);
   assert.match(gatewaySource, /res\.writableLength \+ Buffer\.byteLength\(keepalive, 'utf8'\) > MAX_SSE_BUFFER_BYTES/);
   assert.match(gatewaySource, /repairExecution: false/);
   assert.match(appSource, /addEventListener\('finding'/);
@@ -124,8 +133,26 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   });
 
   let stdout = '';
+  let stderr = '';
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', chunk => {
+    stderr = (stderr + chunk).slice(-8192);
+  });
+  const readGatewaySseUntil = async (...args) => {
+    try {
+      return await readSseUntil(...args);
+    } catch (error) {
+      const message = args[3] || 'SSE read failed';
+      throw new Error(
+        message + ': ' + (error?.message || String(error)) +
+        '; childExitCode=' + (child.exitCode ?? 'running') +
+        '; childSignal=' + (child.signalCode ?? 'none') +
+        '; gatewayStderr=' + stderr.slice(-2000)
+      );
+    }
+  };
   const pairing = await waitUntil(
     () => /Pairing code \(enter in browser; never share\): ([A-Za-z0-9_-]+)/.exec(stdout),
     6000,
@@ -150,7 +177,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   const response = await fetch(`${origin}/api/events`, { headers: { origin, cookie } });
   assert.equal(response.status, 200);
   reader = response.body.getReader();
-  await readSseUntil(reader, text => text.includes('event: connected'), 5000, 'SSE connection event missing');
+  await readGatewaySseUntil(reader, text => text.includes('event: connected'), 5000, 'SSE connection event missing');
 
   const record = {
     signature: 'test-live-finding',
@@ -162,7 +189,7 @@ test('authenticated event stream publishes newly persisted findings', async t =>
     at: new Date().toISOString()
   };
   await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n');
-  const eventText = await readSseUntil(reader, text => text.includes('event: finding'), 5000, 'persisted finding event was not delivered');
+  const eventText = await readGatewaySseUntil(reader, text => text.includes('event: finding'), 5000, 'persisted finding event was not delivered');
   const match = /event: finding\ndata: ([^\n]+)\n\n/.exec(eventText);
   assert.ok(match, eventText);
   const envelope = JSON.parse(match[1]);
@@ -172,4 +199,189 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   assert.equal(envelope.data.evidence.length, 4096);
   assert.equal(envelope.data.evidenceTruncated, true);
   assert.ok(Buffer.byteLength(match[1], 'utf8') < 16 * 1024, 'SSE event payload should remain bounded');
+  const firstEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(eventText)?.[1];
+  assert.ok(firstEventId, 'finding events should expose a standard SSE id');
+
+  const secondRecord = {
+    signature: 'test-live-finding-replay',
+    ruleId: 'TEST_LIVE_FINDING_REPLAY',
+    title: 'Replay finding regression',
+    severity: 'medium',
+    confidence: 'high',
+    evidence: 'replay evidence',
+    at: new Date(Date.now() + 1).toISOString()
+  };
+  await writeFile(join(dataDir, 'findings.jsonl'), JSON.stringify(record) + '\n' + JSON.stringify(secondRecord) + '\n');
+  const secondText = await readGatewaySseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'second persisted finding event was not delivered');
+  const secondEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(secondText)?.[1];
+  assert.ok(secondEventId, 'second finding should expose an SSE id');
+  await reader.cancel();
+  reader = undefined;
+
+  const replayResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': firstEventId }
+  });
+  assert.equal(replayResponse.status, 200);
+  reader = replayResponse.body.getReader();
+  const replayText = await readGatewaySseUntil(reader, text => text.includes('TEST_LIVE_FINDING_REPLAY'), 5000, 'missed finding was not replayed');
+  assert.match(replayText, /event: connected/);
+  assert.match(replayText, /event: finding/);
+  assert.match(replayText, /TEST_LIVE_FINDING_REPLAY/);
+
+  // Evict the first cursor from the bounded history using more than 128
+  // distinct persisted findings. An actually expired cursor must trigger reset,
+  // not silently skip events that fell out of the ring.
+  const burstRecords = Array.from({ length: 130 }, (_, index) => ({
+    signature: `test-live-finding-overflow-${index}`,
+    ruleId: `TEST_LIVE_FINDING_OVERFLOW_${index}`,
+    title: `Replay overflow regression ${index}`,
+    severity: 'low',
+    confidence: 'high',
+    evidence: 'bounded replay evidence',
+    at: new Date(Date.now() + index + 2).toISOString()
+  }));
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords].map(item => JSON.stringify(item)).join('\n') + '\n'
+  );
+  const burstText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_OVERFLOW_129'),
+    8000,
+    'finding burst did not reach the live stream'
+  );
+  let lastBurstEventId;
+  for (const match of burstText.matchAll(/id: ([a-f0-9]{24})\nevent: finding\ndata: ([^\n]+)\n\n/g)) {
+    const envelope = JSON.parse(match[2]);
+    if (envelope.data?.ruleId === 'TEST_LIVE_FINDING_OVERFLOW_129') lastBurstEventId = match[1];
+  }
+  assert.ok(lastBurstEventId, 'latest burst event should expose a replay cursor');
+
+  await reader.cancel();
+  reader = undefined;
+  const resetResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': firstEventId }
+  });
+  assert.equal(resetResponse.status, 200);
+  reader = resetResponse.body.getReader();
+  const resetText = await readGatewaySseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
+  assert.ok(resetText.includes('"snapshotRequired":true'));
+  const resetEventId = /^id: ([a-f0-9]{24})\nevent: reset/m.exec(resetText)?.[1];
+  assert.ok(resetEventId, 'history reset should advance the standard SSE replay cursor');
+
+  const afterResetRecord = {
+    signature: 'test-live-finding-after-reset',
+    ruleId: 'TEST_LIVE_FINDING_AFTER_RESET',
+    title: 'Finding after replay reset',
+    severity: 'low',
+    confidence: 'high',
+    evidence: 'post-reset replay evidence',
+    at: new Date(Date.now() + 500).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, afterResetRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
+  );
+  const afterResetLiveText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_AFTER_RESET'),
+    5000,
+    'finding after reset was not delivered'
+  );
+  assert.match(afterResetLiveText, /event: finding/);
+
+  await reader.cancel();
+  reader = undefined;
+  const afterResetReplayResponse = await fetch(`${origin}/api/events`, {
+    headers: { origin, cookie, 'last-event-id': resetEventId }
+  });
+  assert.equal(afterResetReplayResponse.status, 200);
+  reader = afterResetReplayResponse.body.getReader();
+  const afterResetReplayText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_AFTER_RESET'),
+    5000,
+    'reset cursor was not retained for subsequent event replay'
+  );
+  assert.match(afterResetReplayText, /event: finding/);
+  assert.ok(!afterResetReplayText.includes('event: reset'), 'recognized reset cursor must not trigger another reset');
+
+  // A reset requires a fresh authenticated snapshot before the client opens
+  // another stream. Use a new connection for subsequent live-event checks.
+  await reader.cancel();
+  reader = undefined;
+  const liveResponse = await fetch(origin + '/api/events', { headers: { origin, cookie } });
+  assert.equal(liveResponse.status, 200);
+  reader = liveResponse.body.getReader();
+  await readGatewaySseUntil(reader, text => text.includes('event: connected'), 5000, 'fresh SSE connection event missing');
+
+  // Multibyte evidence is bounded by UTF-8 bytes, not UTF-16 code units.
+  const multibyteRecord = {
+    signature: 'test-live-finding-multibyte-utf8',
+    ruleId: 'TEST_LIVE_FINDING_MULTIBYTE_UTF8',
+    title: 'Multibyte UTF-8 finding regression',
+    severity: 'high',
+    confidence: 'high',
+    evidence: String.fromCodePoint(0x1f600).repeat(4096),
+    at: new Date(Date.now() + 1000).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, multibyteRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
+  );
+  const multibyteText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('TEST_LIVE_FINDING_MULTIBYTE_UTF8'),
+    5000,
+    'multibyte finding was not delivered'
+  );
+  const multibyteMatch = /event: finding\ndata: ([^\n]+)\n\n/.exec(multibyteText);
+  assert.ok(multibyteMatch, multibyteText);
+  const multibyteEnvelope = JSON.parse(multibyteMatch[1]);
+  assert.equal(multibyteEnvelope.data.ruleId, 'TEST_LIVE_FINDING_MULTIBYTE_UTF8');
+  assert.equal(Buffer.byteLength(multibyteEnvelope.data.evidence, 'utf8'), 4096);
+  assert.equal(multibyteEnvelope.data.evidenceTruncated, true);
+  assert.ok(Buffer.byteLength(multibyteMatch[1], 'utf8') < 16 * 1024, 'multibyte SSE payload should remain bounded');
+  const multibyteEventId = /^id: ([a-f0-9]{24})\nevent: finding/m.exec(multibyteText)?.[1];
+  assert.ok(multibyteEventId, 'multibyte finding should expose a replay cursor');
+
+  // JSON escaping can expand control characters beyond the SSE frame limit.
+  // The gateway must publish a bounded reset marker instead of dropping state.
+  const escapedRecord = {
+    signature: 'test-live-finding-escaped-utf8',
+    ruleId: 'TEST_LIVE_FINDING_ESCAPED_UTF8',
+    title: 'Escaped control-character finding regression',
+    severity: 'high',
+    confidence: 'high',
+    evidence: String.fromCharCode(0).repeat(4096),
+    at: new Date(Date.now() + 2000).toISOString()
+  };
+  await writeFile(
+    join(dataDir, 'findings.jsonl'),
+    [record, secondRecord, ...burstRecords, multibyteRecord, escapedRecord].map(item => JSON.stringify(item)).join('\n') + '\n'
+  );
+  const liveOversizeReset = await readGatewaySseUntil(
+    reader,
+    text => text.includes('"reason":"event_too_large"'),
+    5000,
+    'oversized serialized finding did not request a snapshot refresh'
+  );
+  assert.match(liveOversizeReset, /event: reset/);
+  assert.match(liveOversizeReset, /id: [a-f0-9]{24}/);
+
+  await reader.cancel();
+  reader = undefined;
+  const replayResetResponse = await fetch(origin + '/api/events', {
+    headers: { origin, cookie, 'last-event-id': multibyteEventId }
+  });
+  assert.equal(replayResetResponse.status, 200);
+  reader = replayResetResponse.body.getReader();
+  const replayResetText = await readGatewaySseUntil(
+    reader,
+    text => text.includes('"reason":"event_too_large"'),
+    5000,
+    'oversized-event reset marker was not replayed after reconnect'
+  );
+  assert.match(replayResetText, /event: reset/);
+  assert.ok(replayResetText.includes('"snapshotRequired":true'));
 });

@@ -18,11 +18,13 @@ const MAX_BODY = 8 * 1024;
 const MAX_SSE_CLIENTS = 32;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_EVENT_BYTES = 16 * 1024;
-const MAX_FINDING_EVIDENCE_CHARS = 4096;
+const MAX_SSE_HISTORY_EVENTS = 128;
+const MAX_FINDING_EVIDENCE_BYTES = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const cfg = loadConfig();
 const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
 const clients = new Set();
+const eventHistory = [];
 const pairingCode = randomBytes(24).toString('base64url');
 
 const json = (res, status, body, extra = {}) => {
@@ -76,10 +78,19 @@ function authenticated(req) {
   sessions.set(id, Date.now() + SESSION_TTL);
   return true;
 }
-function boundedText(value, maxLength) {
-  if (typeof value === 'string') return value.slice(0, maxLength);
+function boundedText(value, maxBytes) {
   if (value == null) return null;
-  return String(value).slice(0, maxLength);
+  const text = typeof value === 'string' ? value : String(value);
+  let result = '';
+  let bytes = 0;
+  // Iterate Unicode code points so a byte limit never splits a surrogate pair.
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > maxBytes) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return result;
 }
 
 function readFindings(limit = 200) {
@@ -118,8 +129,8 @@ function readFindings(limit = 200) {
       title: boundedText(record.title || record.ruleId, 256),
       severity: boundedText(record.severity || 'unknown', 32),
       confidence: boundedText(record.confidence || 'unknown', 32),
-      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_CHARS),
-      evidenceTruncated: typeof record.evidence === 'string' && record.evidence.length > MAX_FINDING_EVIDENCE_CHARS,
+      evidence: boundedText(record.evidence, MAX_FINDING_EVIDENCE_BYTES),
+      evidenceTruncated: typeof record.evidence === 'string' && Buffer.byteLength(record.evidence, 'utf8') > MAX_FINDING_EVIDENCE_BYTES,
       at: boundedText(record.at, 64),
       shell: boundedText(record.shell, 128),
       cwd: boundedText(record.cwd, 1024),
@@ -127,7 +138,7 @@ function readFindings(limit = 200) {
       advisor: record.advisor ? { pending: Boolean(record.advisor.pending), verdict: boundedText(record.advisor.verdict, 64), requiresHuman: Boolean(record.advisor.requiresHuman), why: boundedText(record.advisor.why, 240), verification: record.advisor.verification ? { verdict: boundedText(record.advisor.verification.verdict || 'unknown', 64), evidence: boundedText(record.advisor.verification.evidence || 'unknown', 128), why: boundedText(record.advisor.verification.why, 240) } : null } : null,
       applied: record.applied ? { status: boundedText(record.applied.status || 'unknown', 64), summary: boundedText(record.applied.summary, 240) } : null,
       requiresHuman: Boolean(record.advisor?.requiresHuman),
-      suppressed: typeof record.suppressed === 'string' ? record.suppressed.slice(0, 240) : record.suppressed ? '[suppressed]' : null
+      suppressed: typeof record.suppressed === 'string' ? boundedText(record.suppressed, 240) : record.suppressed ? '[suppressed]' : null
     }));
 }
 function snapshot() {
@@ -170,32 +181,52 @@ function snapshot() {
     }
   };
 }
-function publish(type, data) {
-  const event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
-  const payload = `event: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+function writeSsePayload(res, payload) {
   const payloadBytes = Buffer.byteLength(payload, 'utf8');
+  if (res.destroyed || res.writableEnded ||
+      payloadBytes > MAX_SSE_EVENT_BYTES ||
+      res.writableLength + payloadBytes > MAX_SSE_BUFFER_BYTES) {
+    clients.delete(res);
+    res.destroy();
+    return false;
+  }
+  try {
+    res.write(payload);
+    if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
+      clients.delete(res);
+      res.destroy();
+      return false;
+    }
+    return true;
+  } catch {
+    clients.delete(res);
+    res.destroy();
+    return false;
+  }
+}
+
+function publish(type, data) {
+  let event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
+  // Standard SSE IDs let EventSource send Last-Event-ID after a reconnect.
+  let payload = `id: ${event.event_id}\nevent: ${type}\ndata: ${JSON.stringify(event)}\n\n`;
+  if (Buffer.byteLength(payload, 'utf8') > MAX_SSE_EVENT_BYTES) {
+    // A dropped oversized event is a replay gap: retaining the previous cursor
+    // would make reconnect replay appear complete even though state was lost.
+    // Publish and retain a small reset marker so live and reconnecting clients
+    // refresh their authenticated snapshot instead of silently missing a finding.
+    event = {
+      protocol: 'watchdogs.local.v1',
+      event_id: randomBytes(12).toString('hex'),
+      type: 'reset',
+      timestamp: new Date().toISOString(),
+      data: { reason: 'event_too_large', snapshotRequired: true }
+    };
+    payload = `id: ${event.event_id}\nevent: reset\ndata: ${JSON.stringify(event)}\n\n`;
+  }
+  eventHistory.push({ id: event.event_id, payload });
+  if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
   for (const res of clients) {
-    if (res.destroyed || res.writableEnded) {
-      clients.delete(res);
-      continue;
-    }
-    // Slow readers must not accumulate unbounded event buffers. Closing the
-    // stream lets EventSource reconnect; snapshot polling is the recovery path.
-    if (payloadBytes > MAX_SSE_EVENT_BYTES || res.writableLength + payloadBytes > MAX_SSE_BUFFER_BYTES) {
-      clients.delete(res);
-      res.destroy();
-      continue;
-    }
-    try {
-      res.write(payload);
-      if (res.writableLength > MAX_SSE_BUFFER_BYTES) {
-        clients.delete(res);
-        res.destroy();
-      }
-    } catch {
-      clients.delete(res);
-      res.destroy();
-    }
+    if (!writeSsePayload(res, payload)) clients.delete(res);
   }
 }
 
@@ -294,6 +325,39 @@ const server = createServer(async (req, res) => {
       res.once('close', cleanup);
       res.once('error', cleanup);
       req.once('aborted', cleanup);
+
+      // Replay only events after the last ID acknowledged by EventSource.
+      // If the bounded ring no longer contains that ID, request a fresh
+      // authenticated snapshot instead of silently dropping state changes.
+      const lastEventId = req.headers['last-event-id'];
+      if (typeof lastEventId === 'string') {
+        const index = /^[a-f0-9]{24}$/.test(lastEventId)
+          ? eventHistory.findIndex(item => item.id === lastEventId)
+          : -1;
+        if (index < 0) {
+          const reset = {
+            protocol: 'watchdogs.local.v1',
+            event_id: randomBytes(12).toString('hex'),
+            type: 'reset',
+            timestamp: new Date().toISOString(),
+            data: { reason: 'event_history_unavailable', snapshotRequired: true }
+          };
+          const payload = `id: ${reset.event_id}\nevent: reset\ndata: ${JSON.stringify(reset)}\n\n`;
+          // Advance the replay cursor after an expired/invalid Last-Event-ID.
+          // Without retaining this reset marker, native EventSource clients that
+          // reconnect without custom reset handling would receive reset forever.
+          eventHistory.push({ id: reset.event_id, payload });
+          if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+          if (!writeSsePayload(res, payload)) cleanup();
+        } else {
+          for (const item of eventHistory.slice(index + 1)) {
+            if (!writeSsePayload(res, item.payload)) {
+              cleanup();
+              break;
+            }
+          }
+        }
+      }
       return;
     }
     if (req.method === 'POST' && url.pathname === '/api/session/logout') {
