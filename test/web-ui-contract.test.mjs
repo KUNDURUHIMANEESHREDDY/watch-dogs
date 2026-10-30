@@ -246,6 +246,15 @@ test('authenticated event stream publishes newly persisted findings', async t =>
   const resetText = await readSseUntil(reader, text => text.includes('event: reset'), 5000, 'evicted event cursor did not request a snapshot refresh');
   assert.ok(resetText.includes('"snapshotRequired":true'));
 
+  // A reset requires a fresh authenticated snapshot before the client opens
+  // another stream. Use a new connection for subsequent live-event checks.
+  await reader.cancel();
+  reader = undefined;
+  const liveResponse = await fetch(origin + '/api/events', { headers: { origin, cookie } });
+  assert.equal(liveResponse.status, 200);
+  reader = liveResponse.body.getReader();
+  await readSseUntil(reader, text => text.includes('event: connected'), 5000, 'fresh SSE connection event missing');
+
   // Multibyte evidence is bounded by UTF-8 bytes, not UTF-16 code units.
   const multibyteRecord = {
     signature: 'test-live-finding-multibyte-utf8',
