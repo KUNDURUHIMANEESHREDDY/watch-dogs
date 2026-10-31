@@ -46,6 +46,21 @@ test('findings reader enforces a record-count cap even within the byte limit', (
   });
 });
 
+test('findings reader never exceeds the byte cap at the exact maxBytes + 1 boundary', () => {
+  withTempDir((dir) => {
+    const path = join(dir, 'findings.jsonl');
+    writeFileSync(path, 'x\n12345\n');
+
+    const lines = readBoundedJsonlLines(path, { maxBytes: 7, maxLines: 5 });
+
+    assert.deepEqual(lines, ['12345']);
+    assert.ok(
+      Buffer.byteLength(lines.join('\n') + '\n', 'utf8') <= 7,
+      'returned JSONL tail must stay within the configured byte limit',
+    );
+  });
+});
+
 test('findings reader rejects invalid limits and ignores symlinks', (t) => {
   withTempDir((dir) => {
     const target = join(dir, 'target.jsonl');
