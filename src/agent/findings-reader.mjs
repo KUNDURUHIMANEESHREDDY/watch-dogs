@@ -63,9 +63,11 @@ export function readBoundedJsonlLines(
       ) return [];
     }
 
-    // Keep one extra byte so we can distinguish a tail beginning exactly on a
-    // newline from one beginning in the middle of a record.
-    const startsMidFile = openedStat.size > maxBytes + 1;
+    // Read one context byte before the configured tail. If the tail starts in
+    // the middle of a record, discard that partial record even when the file
+    // is exactly maxBytes + 1 bytes long. The returned payload never includes
+    // more than maxBytes bytes.
+    const startsMidFile = openedStat.size > maxBytes;
     const start = startsMidFile ? openedStat.size - maxBytes - 1 : 0;
     const length = Math.min(openedStat.size - start, maxBytes + 1);
     const buffer = Buffer.alloc(length);
@@ -78,7 +80,7 @@ export function readBoundedJsonlLines(
     }
 
     let text = buffer.subarray(0, offset).toString('utf8');
-    if (start > 0) {
+    if (startsMidFile) {
       const newline = text.indexOf('\n');
       text = newline < 0 ? '' : text.slice(newline + 1);
     }
