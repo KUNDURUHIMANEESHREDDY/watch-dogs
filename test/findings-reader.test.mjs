@@ -104,13 +104,13 @@ test('findings reader rejects a regular-file replacement between lstat and open'
 test('findings reader never exceeds the byte cap at the exact maxBytes + 1 boundary', () => {
   withTempDir((dir) => {
     const path = join(dir, 'findings.jsonl');
-    writeFileSync(path, 'x\\n12345\\n');
+    writeFileSync(path, 'x\n12345\n');
 
     const lines = readBoundedJsonlLines(path, { maxBytes: 7, maxLines: 5 });
 
     assert.deepEqual(lines, ['12345']);
     assert.ok(
-      Buffer.byteLength(lines.join('\\n') + '\\n', 'utf8') <= 7,
+      Buffer.byteLength(lines.join('\n') + '\n', 'utf8') <= 7,
       'returned JSONL tail must stay within the configured byte limit',
     );
   });
