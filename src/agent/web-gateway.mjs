@@ -10,6 +10,7 @@ import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
 import { createSessionStore } from './session-store.mjs';
+import { parseJsonObject } from './json-body.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -21,8 +22,9 @@ const MAX_SSE_EVENT_BYTES = 16 * 1024;
 const MAX_SSE_HISTORY_EVENTS = 128;
 const MAX_FINDING_EVIDENCE_BYTES = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
+const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
-const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: 256 });
+const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: MAX_ACTIVE_SESSIONS });
 const clients = new Set();
 const eventHistory = [];
 const pairingCode = randomBytes(24).toString('base64url');
@@ -56,8 +58,15 @@ function readBody(req) {
     });
     req.on('end', () => {
       if (tooLarge) return;
-      try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
-      catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
+      try { resolveBody(parseJsonObject(chunks)); }
+      catch (error) {
+        const message = error?.code === 'ERR_INVALID_JSON_UTF8'
+          ? 'invalid JSON encoding'
+          : error?.code === 'ERR_JSON_BODY_TYPE'
+            ? 'JSON body must be an object'
+            : 'invalid JSON';
+        reject(Object.assign(new Error(message), { status: 400 }));
+      }
     });
     req.on('error', error => {
       if (!tooLarge) reject(error);
@@ -276,6 +285,11 @@ const server = createServer(async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: e.message }); }
     if (!safeEqual(body.pairingCode ?? '', pairingCode)) return json(res, 401, { error: 'invalid_pairing_code' });
+    // Preserve existing live sessions at capacity; reject new pairings instead
+    // of silently evicting an authenticated browser session.
+    if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+      return json(res, 503, { error: 'session_capacity_reached' });
+    }
     const id = randomBytes(32).toString('base64url');
     sessions.set(id, Date.now() + SESSION_TTL);
     return json(res, 200, { ok: true, expiresInSeconds: SESSION_TTL / 1000 }, { 'Set-Cookie': `wd_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}` });
