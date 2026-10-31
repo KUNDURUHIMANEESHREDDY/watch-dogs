@@ -10,6 +10,7 @@ import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
 import { createSessionStore } from './session-store.mjs';
+import { parseJsonObject } from './json-body.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -52,8 +53,15 @@ function readBody(req) {
     });
     req.on('end', () => {
       if (tooLarge) return;
-      try { resolveBody(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); }
-      catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
+      try { resolveBody(parseJsonObject(chunks)); }
+      catch (error) {
+        const message = error?.code === 'ERR_INVALID_JSON_UTF8'
+          ? 'invalid JSON encoding'
+          : error?.code === 'ERR_JSON_BODY_TYPE'
+            ? 'JSON body must be an object'
+            : 'invalid JSON';
+        reject(Object.assign(new Error(message), { status: 400 }));
+      }
     });
     req.on('error', error => {
       if (!tooLarge) reject(error);
