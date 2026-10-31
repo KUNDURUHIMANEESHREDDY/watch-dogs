@@ -127,6 +127,15 @@ test.afterAll(async () => {
 test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair restores the UI', async ({ page }) => {
   const code = pairingCode!;
   const snapshot = await pairWithGateway(page, code);
+
+  const oversizedResponse = await fetch(`${BASE_URL}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code, padding: 'x'.repeat(10 * 1024) }),
+  });
+  expect(oversizedResponse.status).toBe(413);
+  await expect(oversizedResponse.json()).resolves.toEqual({ error: 'request body too large' });
+
   console.log(`Real gateway verified: Node ${snapshot.agent.version}, PID ${snapshot.agent.pid}, port ${snapshot.agent.port}.`);
 
   const cookie = (await page.context().cookies(BASE_URL)).find((candidate) => candidate.name === 'wd_session');
@@ -134,6 +143,14 @@ test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair
   expect(cookie!.httpOnly).toBe(true);
   expect(cookie!.sameSite).toBe('Strict');
   expect(await page.evaluate(() => document.cookie)).not.toContain('wd_session=');
+
+  const malformedPath = await fetch(`${BASE_URL}/%E0%A4%A`);
+  expect(malformedPath.status).toBe(404);
+  await expect(malformedPath.json()).resolves.toEqual({ error: 'not_found' });
+  const snapshotAfterMalformedPath = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: `wd_session=${cookie!.value}` },
+  });
+  expect(snapshotAfterMalformedPath.status).toBe(200);
 
   // Revoke from outside the browser app so it retains its cookie and must handle a real 401.
   const revoke = await fetch(`${BASE_URL}/api/session/logout`, {
@@ -159,6 +176,40 @@ test('real gateway uses an HttpOnly session, revocation returns 401, and re-pair
   await pairWithGateway(page, code);
   await page.getByRole('button', { name: 'Activity history' }).click();
   await expect(page.getByRole('heading', { name: /Activity history/ })).toBeVisible();
+
+  // The stream registry must track response lifetime, not request-body
+  // completion, and it must reject excess streams with a deterministic 503.
+  const activeCookie = (await page.context().cookies(BASE_URL)).find((candidate) => candidate.name === 'wd_session');
+  expect(activeCookie, 'Re-pairing should issue an active session cookie.').toBeDefined();
+  const streamControllers: AbortController[] = [];
+  try {
+    for (let index = 0; index < 32; index += 1) {
+      const controller = new AbortController();
+      streamControllers.push(controller);
+      const stream = await fetch(`${BASE_URL}/api/events`, {
+        headers: { Cookie: `wd_session=${activeCookie!.value}` },
+        signal: controller.signal,
+      });
+      expect(stream.status, `SSE client ${index + 1} should be accepted`).toBe(200);
+    }
+    const overCapacity = await fetch(`${BASE_URL}/api/events`, {
+      headers: { Cookie: `wd_session=${activeCookie!.value}` },
+    });
+    expect(overCapacity.status).toBe(503);
+    expect(overCapacity.headers.get('retry-after')).toBe('5');
+    await expect(overCapacity.json()).resolves.toEqual({ error: 'event_stream_capacity_reached' });
+  } finally {
+    for (const controller of streamControllers) controller.abort();
+  }
+
+  await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  const recoveryController = new AbortController();
+  const recoveredStream = await fetch(`${BASE_URL}/api/events`, {
+    headers: { Cookie: `wd_session=${activeCookie!.value}` },
+    signal: recoveryController.signal,
+  });
+  expect(recoveredStream.status, 'Closed streams should release capacity').toBe(200);
+  recoveryController.abort();
 });
 
 test('gateway outage stays distinct from session expiry; restart invalidates old sessions and allows re-pairing', async ({ page }) => {
@@ -181,4 +232,37 @@ test('gateway outage stays distinct from session expiry; restart invalidates old
   expect(recoveredSnapshot.protocol).toBe('watchdogs.local.v1');
   await page.getByRole('button', { name: 'Activity history' }).click();
   await expect(page.getByRole('heading', { name: /Activity history/ })).toBeVisible();
+});
+
+
+test('gateway rejects new pairings at capacity without evicting existing sessions', async () => {
+  // Restart to isolate the in-memory session store from preceding browser tests.
+  await stopGateway();
+  const code = await startGateway();
+  const cookies: string[] = [];
+  for (let index = 0; index < 64; index += 1) {
+    const response = await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairingCode: code }),
+    });
+    expect(response.status, `pairing ${index + 1} should be accepted`).toBe(200);
+    const cookie = response.headers.get('set-cookie');
+    expect(cookie).toBeTruthy();
+    cookies.push(cookie!.split(';', 1)[0]);
+  }
+
+  const overCapacity = await fetch(`${BASE_URL}/api/session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode: code }),
+  });
+  expect(overCapacity.status).toBe(503);
+  await expect(overCapacity.json()).resolves.toEqual({ error: 'session_capacity_reached' });
+
+  // Capacity rejection must not invalidate the oldest live session.
+  const firstSnapshot = await fetch(`${BASE_URL}/api/snapshot`, {
+    headers: { Cookie: cookies[0] },
+  });
+  expect(firstSnapshot.status).toBe(200);
 });

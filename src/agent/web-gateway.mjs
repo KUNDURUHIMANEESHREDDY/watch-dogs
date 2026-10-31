@@ -1,19 +1,26 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { readJournal } from './journal-reader.mjs';
+import { readBoundedLogTail } from './log-tail.mjs';
+import { readBoundedJsonlLines } from './findings-reader.mjs';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
+import { createSessionStore } from './session-store.mjs';
+import { parseJsonObject } from './json-body.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.WD_WEB_PORT || 4317);
 const MAX_BODY = 8 * 1024;
+const MAX_SSE_CLIENTS = 32;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
+const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
-const sessions = new Map();
+const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: MAX_ACTIVE_SESSIONS });
 const clients = new Set();
 const pairingCode = randomBytes(24).toString('base64url');
 
@@ -28,19 +35,37 @@ const safeEqual = (a, b) => {
 };
 function readBody(req) {
   return new Promise((resolveBody, reject) => {
-    let raw = '';
+    const chunks = [];
+    let bytes = 0;
+    let tooLarge = false;
     req.on('data', chunk => {
-      raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_BODY) {
+      // Stop retaining bytes once the limit is crossed, but keep draining the
+      // request so the handler can return a deterministic HTTP 413 response.
+      if (tooLarge) return;
+      bytes += chunk.length;
+      if (bytes > MAX_BODY) {
+        tooLarge = true;
+        chunks.length = 0;
         reject(Object.assign(new Error('request body too large'), { status: 413 }));
-        req.destroy();
+        return;
       }
+      chunks.push(chunk);
     });
     req.on('end', () => {
-      try { resolveBody(raw ? JSON.parse(raw) : {}); }
-      catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
+      if (tooLarge) return;
+      try { resolveBody(parseJsonObject(chunks)); }
+      catch (error) {
+        const message = error?.code === 'ERR_INVALID_JSON_UTF8'
+          ? 'invalid JSON encoding'
+          : error?.code === 'ERR_JSON_BODY_TYPE'
+            ? 'JSON body must be an object'
+            : 'invalid JSON';
+        reject(Object.assign(new Error(message), { status: 400 }));
+      }
     });
-    req.on('error', reject);
+    req.on('error', error => {
+      if (!tooLarge) reject(error);
+    });
   });
 }
 function isOriginAllowed(req) {
@@ -50,7 +75,7 @@ function isOriginAllowed(req) {
 function authenticated(req) {
   const id = parseCookies(req.headers.cookie).wd_session;
   const expires = id && sessions.get(id);
-  if (!expires || expires < Date.now()) {
+  if (!expires || expires <= Date.now()) {
     if (id) sessions.delete(id);
     return false;
   }
@@ -63,7 +88,7 @@ function readFindings(limit = 200) {
   for (const path of [base + '.1', base]) {
     try {
       if (!existsSync(path)) continue;
-      const lines = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean);
+      const lines = readBoundedJsonlLines(path);
       for (const line of lines) {
         try {
           const record = JSON.parse(line);
@@ -104,54 +129,18 @@ function readFindings(limit = 200) {
       suppressed: record.suppressed || null
     }));
 }
-function readJournal(limit = 100) {
-  const dir = join(cfg.paths.data, 'journal');
-  let files = [];
-  try {
-    files = readdirSync(dir).filter(name => name.endsWith('.json')).sort();
-  } catch {
-    return [];
-  }
-  const entries = [];
-  for (const name of files) {
-    try {
-      const entry = JSON.parse(readFileSync(join(dir, name), 'utf8'));
-      if (!entry || typeof entry !== 'object') continue;
-      let target = null;
-      if (typeof entry.abs === 'string') {
-        const rel = relative(cfg.projectRoot, resolve(entry.abs));
-        target = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
-          ? '[outside project]'
-          : rel;
-      }
-      entries.push({
-        id: String(entry.id || name.replace(/\.json$/i, '')),
-        at: entry.at || null,
-        outcome: entry.outcome || 'unknown',
-        type: entry.type || 'unknown',
-        target,
-        source: entry.source || null,
-        txOutcome: entry.txOutcome || null,
-        reason: typeof entry.why === 'string' ? entry.why.slice(0, 240) : null
-      });
-    } catch {
-      // A corrupt entry must not make the authenticated health snapshot unavailable.
-    }
-  }
-  return entries.sort((a, b) => String(a.at || '').localeCompare(String(b.at || ''))).slice(-limit).reverse();
-}
 function snapshot() {
   const heartbeat = readHeartbeat(cfg.paths.data);
   let logs = [];
   try {
     const file = join(cfg.paths.data, 'daemon.log');
-    if (existsSync(file)) logs = readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).slice(-80).map((line, i) => ({ id: i, line }));
+    if (existsSync(file)) logs = readBoundedLogTail(file).map((line, i) => ({ id: i, line }));
   } catch {}
   let dataFiles = [];
   try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
   const findings = readFindings();
   const verifications = findings.filter(record => record.advisor?.verification).map(record => ({ id: record.id, title: record.title, status: record.advisor.verification.evidence || record.advisor.verification.verdict, verdict: record.advisor.verification.verdict, evidence: record.advisor.verification.why || record.advisor.verification.evidence, at: record.at }));
-  const journal = readJournal();
+  const journal = readJournal(cfg.paths.data, cfg.projectRoot);
   return {
     protocol: 'watchdogs.local.v1',
     generatedAt: new Date().toISOString(),
@@ -200,6 +189,11 @@ const server = createServer(async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: e.message }); }
     if (!safeEqual(body.pairingCode ?? '', pairingCode)) return json(res, 401, { error: 'invalid_pairing_code' });
+    // Preserve existing live sessions at capacity; reject new pairings instead
+    // of silently evicting an authenticated browser session.
+    if (sessions.size >= MAX_ACTIVE_SESSIONS) {
+      return json(res, 503, { error: 'session_capacity_reached' });
+    }
     const id = randomBytes(32).toString('base64url');
     sessions.set(id, Date.now() + SESSION_TTL);
     return json(res, 200, { ok: true, expiresInSeconds: SESSION_TTL / 1000 }, { 'Set-Cookie': `wd_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}` });
@@ -210,11 +204,25 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, agentPid: process.pid, timestamp: new Date().toISOString() });
     if (req.method === 'GET' && url.pathname === '/api/snapshot') return json(res, 200, snapshot());
     if (req.method === 'GET' && url.pathname === '/api/events') {
+      // A local dashboard can reconnect repeatedly; bound open streams so a
+      // stale tab or local client cannot retain unbounded sockets and timers.
+      if (clients.size >= MAX_SSE_CLIENTS) {
+        return json(res, 503, { error: 'event_stream_capacity_reached' }, { 'Retry-After': '5' });
+      }
       res.writeHead(200, { 'Content-Type':'text/event-stream; charset=utf-8', 'Cache-Control':'no-store', Connection:'keep-alive', 'X-Accel-Buffering':'no' });
       res.write(`event: connected\ndata: ${JSON.stringify({ protocol:'watchdogs.local.v1', type:'connected', timestamp:new Date().toISOString() })}\n\n`);
       clients.add(res);
-      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch {} }, 15000);
-      req.on('close', () => { clearInterval(heartbeat); clients.delete(res); });
+      const heartbeat = setInterval(() => { try { res.write(': keepalive\n\n'); } catch { cleanup(); } }, 15000);
+      const cleanup = () => {
+        clearInterval(heartbeat);
+        clients.delete(res);
+      };
+      // IncomingMessage 'close' fires when the request body completes, which
+      // is immediately for GET. The response close event tracks the lifetime
+      // of the actual SSE stream and must own cleanup instead.
+      res.once('close', cleanup);
+      res.once('error', cleanup);
+      req.once('aborted', cleanup);
       return;
     }
     if (req.method === 'POST' && url.pathname === '/api/session/logout') {
@@ -228,7 +236,14 @@ const server = createServer(async (req, res) => {
     return json(res, 404, { error:'not_found' });
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error:'method_not_allowed' });
-  const requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  let requested;
+  try {
+    requested = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);
+  } catch {
+    // Malformed percent-encoding is a client path error, not a reason to let
+    // an async request handler reject outside the HTTP error boundary.
+    return json(res, 404, { error: 'not_found' });
+  }
   const target = resolve(ROOT, `.${requested}`);
   if (target !== ROOT && !target.startsWith(ROOT + sep)) return json(res, 403, { error:'path_not_allowed' });
   try {
@@ -238,6 +253,11 @@ const server = createServer(async (req, res) => {
     res.end(readFileSync(target));
   } catch { json(res, 404, { error:'not_found' }); }
 });
+// Bound slow headers and bodies: oversized requests are drained to return 413,
+// but a client must not be able to hold the local gateway open indefinitely.
+server.requestTimeout = 15_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
 server.listen(PORT, HOST, () => {
   console.log('\nWATCH DOGS LOCAL CONTROL CENTER');
   console.log(`URL: http://${HOST}:${PORT}`);
