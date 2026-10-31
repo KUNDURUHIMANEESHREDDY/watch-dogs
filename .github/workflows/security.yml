@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -113,3 +113,45 @@ jobs:
             frontend/sbom-frontend.json
           if-no-files-found: error
           retention-days: 30
+
+  codeql:
+    name: CodeQL (JavaScript/TypeScript)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - name: Analyze source
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+
+  security-required:
+    name: security-required
+    if: always()
+    needs: [dependency-audit, secret-scan, sbom, codeql]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail closed unless all security checks passed
+        env:
+          DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
+          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          SBOM_RESULT: ${{ needs.sbom.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: |
+          set -euo pipefail
+          printf 'Dependency audit: %s\\n' "$DEPENDENCY_AUDIT_RESULT"
+          printf 'Secret scan: %s\\n' "$SECRET_SCAN_RESULT"
+          printf 'SBOM: %s\\n' "$SBOM_RESULT"
+          printf 'CodeQL: %s\\n' "$CODEQL_RESULT"
+          test "$DEPENDENCY_AUDIT_RESULT" = success
+          test "$SECRET_SCAN_RESULT" = success
+          test "$SBOM_RESULT" = success
+          test "$CODEQL_RESULT" = success

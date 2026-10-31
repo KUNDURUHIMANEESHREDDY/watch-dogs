@@ -1,0 +1,94 @@
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+} from 'node:fs';
+
+const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_LINES = 5_000;
+
+/**
+ * Read a bounded tail of a JSONL file.
+ *
+ * The gateway only needs recent finding records for its dashboard snapshot.
+ * Reading the whole append-only file on every snapshot makes memory and CPU
+ * use grow with the lifetime of the watchdog. This helper caps bytes and
+ * record count, drops a potentially partial first record, and refuses links
+ * and non-regular files.
+ */
+export function readBoundedJsonlLines(
+  path,
+  { maxBytes = DEFAULT_MAX_BYTES, maxLines = DEFAULT_MAX_LINES } = {},
+) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new RangeError('maxBytes must be a positive safe integer');
+  }
+  if (!Number.isSafeInteger(maxLines) || maxLines < 1) {
+    throw new RangeError('maxLines must be a positive safe integer');
+  }
+
+  const linkStat = lstatSync(path);
+  if (!linkStat.isFile() || linkStat.isSymbolicLink()) return [];
+
+  // O_NOFOLLOW closes the lstat/open symlink race on platforms that support it.
+  // The descriptor identity check below also rejects regular-file path swaps.
+  const flags = process.platform === 'win32'
+    ? 'r'
+    : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+  const fd = openSync(path, flags);
+
+  try {
+    const openedStat = fstatSync(fd);
+    // Reject a regular-file replacement between the initial lstat and open.
+    // Large append-only files are valid: the actual read buffer below is still
+    // capped to maxBytes + 1 so it can return a bounded tail.
+    if (
+      !openedStat.isFile()
+      || openedStat.dev !== linkStat.dev
+      || openedStat.ino !== linkStat.ino
+    ) return [];
+
+    // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms, but
+    // a path can still change after open. Verify it still names this descriptor.
+    let currentStat;
+    try {
+      currentStat = lstatSync(path);
+    } catch {
+      return [];
+    }
+    if (
+      currentStat.isSymbolicLink()
+      || !currentStat.isFile()
+      || currentStat.dev !== openedStat.dev
+      || currentStat.ino !== openedStat.ino
+    ) return [];
+
+    // Read one context byte before the configured tail. If the tail starts in
+    // the middle of a record, discard that partial record even when the file is
+    // exactly maxBytes + 1 bytes long.
+    const startsMidFile = openedStat.size > maxBytes;
+    const start = startsMidFile ? openedStat.size - maxBytes - 1 : 0;
+    const length = Math.min(openedStat.size - start, maxBytes + 1);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+
+    while (offset < length) {
+      const count = readSync(fd, buffer, offset, length - offset, start + offset);
+      if (count === 0) break;
+      offset += count;
+    }
+
+    let text = buffer.subarray(0, offset).toString('utf8');
+    if (startsMidFile) {
+      const newline = text.indexOf('\n');
+      text = newline < 0 ? '' : text.slice(newline + 1);
+    }
+
+    return text.split(/\r?\n/).filter(Boolean).slice(-maxLines);
+  } finally {
+    closeSync(fd);
+  }
+}

@@ -32,8 +32,8 @@ The gateway serves the frontend, requires an authenticated local session for API
 This is the first secure gateway/UI slice, not the completed repair console:
 
 - Real data: gateway health, configured capture layers, daemon heartbeat, current autonomy setting, and a bounded tail of the daemon log.
-- Event stream: authenticated Server-Sent Events connection with keepalives; current snapshot polling remains the fallback.
-- Not yet connected: live Watcher finding events, complete session registry, repair proposal lifecycle, browser-triggered action execution, verification details, rollback controls, and graph data.
+- Event stream: authenticated Server-Sent Events connection with keepalives. The gateway checks the persisted findings journal once per second and emits a `finding` event when a sanitized record is added or updated; snapshot polling remains the fallback.
+- Not yet connected: in-memory Watcher events before persistence, complete session registry, repair proposal lifecycle, browser-triggered action execution, verification details, rollback controls, and graph data.
 - Mutating repair endpoints deliberately return `501 repair_bridge_not_implemented`. Do not remove this guard until an in-process coordinator is connected to the existing guarded action and verification modules and integration tests cover the complete flow.
 
 ## Security notes

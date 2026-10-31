@@ -65,7 +65,7 @@ $('pair-form').addEventListener('submit', async event => {
     showApp();
     await refreshSnapshot();
     connectEvents();
-    state.pollTimer = setInterval(refreshSnapshot, 10000);
+    state.pollTimer = setInterval(refreshAndReconnectEvents, 10000);
     state.freshnessTimer = setInterval(updateFreshness, 1000);
   } catch (error) {
     $('pair-error').textContent = error.message === 'invalid_pairing_code'
@@ -88,6 +88,12 @@ async function refreshSnapshot() {
     showNotice(`Connection interrupted. Retrying automatically. ${state.lastError}`);
     updateFreshness();
   }
+}
+async function refreshAndReconnectEvents() {
+  await refreshSnapshot();
+  // A reset can leave the stream closed if the snapshot request fails transiently.
+  // The normal polling path retries and reconnects only after a valid snapshot.
+  if (state.snapshot && !state.lastError && !state.eventSource) connectEvents();
 }
 function validateSnapshot(value) {
   if (!value || typeof value !== 'object' || value.protocol !== 'watchdogs.local.v1') {
@@ -312,7 +318,7 @@ function renderDetail(view) {
   let body = '';
   if (view === 'incidents') {
     body = `<div class="detail-heading"><div><span class="section-kicker">FINDINGS / EVIDENCE</span><h2>Incident queue</h2><p>${findings.length ? 'Findings returned by the runtime snapshot.' : 'No findings are exposed by the current gateway.'}</p></div><span class="detail-state">${findings.length} records</span></div>`;
-    body += findings.length ? `<div class="detail-grid">${findings.map((f,i)=>{const status=f.applied?.status ?? (f.requiresHuman?'Requires human review':f.advisor?.pending?'Advisor pending':f.suppressed?'Suppressed':'Observed');return `<article class="detail-card"><h3>${esc(f.title ?? f.message ?? f.rule ?? `Finding ${i+1}`)}</h3><p>${esc(f.severity ?? 'Severity not reported')}  -  ${esc(status)}</p><p>${esc(f.evidence ?? f.line ?? f.detail ?? 'No evidence field returned.')}</p><p>${esc([f.shell,f.cwd] .filter(Boolean).join('  -  ') || 'Source context not reported')}</p><p>${esc(f.at ? formatTime(f.at) : 'Timestamp not reported')}</p></article>`}).join('')}</div>` : emptyCard('No persisted findings',capabilityText,'The UI will display findings only when the local watchdog has recorded real finding records.');
+    body += findings.length ? `<div class="detail-grid">${findings.map((f,i)=>{const status=f.applied?.status ?? (f.requiresHuman?'Requires human review':f.advisor?.pending?'Advisor pending':f.suppressed?'Suppressed':'Observed');return `<article class="detail-card"><h3>${esc(f.title ?? f.message ?? f.rule ?? `Finding ${i+1}`)}</h3><p>${esc(f.severity ?? 'Severity not reported')}  -  ${esc(status)}</p><p>${esc(f.evidence ?? f.line ?? f.detail ?? 'No evidence field returned.')}${f.evidenceTruncated ? ' <em>Evidence truncated to 4 KiB for resource safety.</em>' : ''}</p><p>${esc([f.shell,f.cwd] .filter(Boolean).join('  -  ') || 'Source context not reported')}</p><p>${esc(f.at ? formatTime(f.at) : 'Timestamp not reported')}</p></article>`}).join('')}</div>` : emptyCard('No persisted findings',capabilityText,'The UI will display findings only when the local watchdog has recorded real finding records.');
   } else if (view === 'repairs') {
     body = `<div class="detail-heading"><div><span class="section-kicker">GUARDED ACTIONS / REVIEW</span><h2>Repair proposals</h2><p>Every proposed change must be reviewed against the existing safety rails.</p></div><span class="detail-state">${caps.repairExecution ? proposals.length+' proposals' : 'Execution disabled'}</span></div>`;
     body += proposals.length ? `<div class="detail-grid">${proposals.map((p,i)=>`<article class="detail-card"><h3>${esc(p.title ?? p.kind ?? `Proposal ${i+1}`)}</h3><p>${esc(p.reason ?? 'Reason not supplied')}</p><p>Target: ${esc(p.target ?? p.path ?? 'Not reported')}</p><button class="button primary" disabled title="Approval bridge is not implemented">Approve proposal unavailable</button></article>`).join('')}</div>` : emptyCard('No actionable proposals available',capabilityText,'Approval and execution controls remain disabled until the guarded runtime bridge is implemented and tested.');
@@ -348,7 +354,32 @@ function connectEvents() {
   const source = new EventSource('/api/events');
   state.eventSource = source;
   source.addEventListener('connected', () => {
-    $('activity-subtitle').textContent = 'Event stream connected  -  detailed findings are not yet bridged';
+    $('activity-subtitle').textContent = 'Live persisted finding stream connected  -  repair execution remains disabled';
+  });
+  source.addEventListener('reset', async () => {
+    // A reset means this EventSource's Last-Event-ID is no longer replayable.
+    // Close it before refreshing so a new EventSource starts without the stale cursor.
+    source.close();
+    if (state.eventSource === source) state.eventSource = null;
+    $('activity-subtitle').textContent = 'Event history unavailable  -  refreshing authenticated snapshot';
+    await refreshAndReconnectEvents();
+  });
+  source.addEventListener('finding', event => {
+    let envelope;
+    try { envelope = JSON.parse(event.data); } catch { return; }
+    if (envelope?.protocol !== 'watchdogs.local.v1' || envelope?.type !== 'finding') return;
+    const finding = envelope.data;
+    if (!finding || typeof finding !== 'object' || typeof finding.id !== 'string') return;
+    if (!state.snapshot) return;
+    const existing = Array.isArray(state.snapshot.findings) ? state.snapshot.findings : [];
+    state.snapshot = {
+      ...state.snapshot,
+      findings: [finding, ...existing.filter(item => String(item?.id ?? '') !== finding.id)].slice(0, 200)
+    };
+    state.lastSuccessAt = Date.now();
+    state.lastError = '';
+    renderSnapshot();
+    $('activity-subtitle').textContent = 'Live finding received  -  persisted runtime evidence';
   });
   source.onerror = () => {
     $('activity-subtitle').textContent = 'Event stream reconnecting  -  snapshot polling continues';
