@@ -43,7 +43,11 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(gatewaySource, /findings\.jsonl/);
   assert.match(gatewaySource, /findingsSnapshot: true/);
   assert.match(gatewaySource, /journalSnapshot: true/);
-  assert.match(gatewaySource, /function readJournal/);
+  assert.match(gatewaySource, /import \{ readJournal \} from '\.\/journal-reader\.mjs'/);
+  const journalReaderSource = await readFile(new URL('../src/agent/journal-reader.mjs', import.meta.url), 'utf8');
+  assert.match(journalReaderSource, /export function readJournal/);
+  assert.match(journalReaderSource, /MAX_JOURNAL_FILES = 200/);
+  assert.match(journalReaderSource, /MAX_JOURNAL_ENTRY_BYTES = 256 \* 1024/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /repairExecution: false/);
 });
