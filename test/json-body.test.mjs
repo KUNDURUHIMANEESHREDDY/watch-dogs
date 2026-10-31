@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { parseJsonObject } from '../src/agent/json-body.mjs';
 
 test('preserves a UTF-8 code point split across request chunks', () => {
-  const expected = { pairingCode: 'not-valid', note: 'split 🧪 code point' };
+  const expected = { pairingCode: 'not-valid', note: 'split \u{1F9EA} code point' };
   const bytes = Buffer.from(JSON.stringify(expected), 'utf8');
-  const marker = Buffer.from('🧪', 'utf8');
+  const marker = Buffer.from('\u{1F9EA}', 'utf8');
   const offset = bytes.indexOf(marker);
   assert.ok(offset >= 0);
 
