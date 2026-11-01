@@ -22,7 +22,7 @@ export function readJsonBody(req, maxBytes) {
     };
 
     const declaredLength = req.headers?.['content-length'];
-    if (declaredLength !== undefined && /^\\d+$/.test(String(declaredLength))) {
+    if (declaredLength !== undefined && /^\d+$/.test(String(declaredLength))) {
       const declaredBytes = Number(declaredLength);
       if (Number.isSafeInteger(declaredBytes) && declaredBytes > maxBytes) {
         fail(Object.assign(new Error('request body too large'), { status: 413 }), true);
