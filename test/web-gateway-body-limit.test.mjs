@@ -65,6 +65,14 @@ test('accepts a body exactly at the byte limit', async () => {
   assert.deepEqual(await result, { a: 1 });
 });
 
+test('rejects malformed UTF-8 instead of replacing invalid bytes during JSON decoding', async () => {
+  const request = new FakeRequest();
+  const result = readJsonBody(request, 32);
+  request.emit('data', Buffer.from([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xc3, 0x28, 0x22, 0x7d]));
+  request.emit('end');
+  await assert.rejects(result, (error) => error.status === 400 && error.message === 'invalid JSON');
+});
+
 test('rejects malformed and non-object JSON with HTTP 400 semantics', async () => {
   const malformed = new FakeRequest();
   const malformedResult = readJsonBody(malformed, 32);
