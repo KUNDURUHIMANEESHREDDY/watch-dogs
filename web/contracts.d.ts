@@ -127,6 +127,8 @@ export interface GatewayCapabilities {
   findingsSnapshot: boolean;
   journalSnapshot: boolean;
   liveFindingEvents: boolean;
+  /** True only when the bounded sanitized SSE cursor ring is durably readable/writable. */
+  durableEventReplay: boolean;
   repairExecution: boolean;
   note?: string;
 }

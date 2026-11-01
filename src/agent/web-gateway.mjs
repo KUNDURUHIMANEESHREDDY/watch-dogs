@@ -11,6 +11,7 @@ import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
 import { createSessionStore } from './session-store.mjs';
 import { parseJsonObject } from './json-body.mjs';
+import { loadEventHistory, persistEventHistory } from './event-history.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -20,13 +21,17 @@ const MAX_SSE_CLIENTS = 32;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_EVENT_BYTES = 16 * 1024;
 const MAX_SSE_HISTORY_EVENTS = 128;
+const MAX_SSE_HISTORY_BYTES = 3 * 1024 * 1024;
 const MAX_FINDING_EVIDENCE_BYTES = 4096;
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const MAX_ACTIVE_SESSIONS = 64;
 const cfg = loadConfig();
 const sessions = createSessionStore({ ttlMs: SESSION_TTL, maxSessions: MAX_ACTIVE_SESSIONS });
 const clients = new Set();
-const eventHistory = [];
+const eventHistoryPath = join(cfg.paths.data, 'finding-events.jsonl');
+const loadedEventHistory = loadEventHistory(eventHistoryPath, { maxEvents: MAX_SSE_HISTORY_EVENTS, maxBytes: MAX_SSE_HISTORY_BYTES, maxEventBytes: MAX_SSE_EVENT_BYTES });
+const eventHistory = loadedEventHistory.events;
+let eventHistoryPersistenceHealthy = loadedEventHistory.healthy && persistEventHistory(eventHistoryPath, eventHistory, { maxEvents: MAX_SSE_HISTORY_EVENTS, maxBytes: MAX_SSE_HISTORY_BYTES, maxEventBytes: MAX_SSE_EVENT_BYTES });
 const pairingCode = randomBytes(24).toString('base64url');
 
 const json = (res, status, body, extra = {}) => {
@@ -185,8 +190,11 @@ function snapshot() {
       findingsSnapshot: true,
       journalSnapshot: true,
       liveFindingEvents: true,
+      durableEventReplay: eventHistoryPersistenceHealthy,
       repairExecution: false,
-      note: 'The gateway streams newly persisted or updated finding records over the authenticated event stream. In-memory watcher events before persistence and browser-triggered repair execution are not connected.'
+      note: eventHistoryPersistenceHealthy
+        ? 'Finding changes are sourced from persisted findings.jsonl; the bounded sanitized SSE cursor history is atomically persisted in finding-events.jsonl and survives gateway restarts. In-memory watcher events before persistence and browser-triggered repair execution are not connected.'
+        : 'Durable SSE replay is unavailable because finding-events.jsonl could not be validated or written. Reconnecting clients must refresh the authenticated snapshot. Browser-triggered repair execution remains disabled.'
     }
   };
 }
@@ -214,6 +222,12 @@ function writeSsePayload(res, payload) {
   }
 }
 
+function rememberEvent(item) {
+  eventHistory.push(item);
+  if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+  eventHistoryPersistenceHealthy = persistEventHistory(eventHistoryPath, eventHistory, { maxEvents: MAX_SSE_HISTORY_EVENTS, maxBytes: MAX_SSE_HISTORY_BYTES, maxEventBytes: MAX_SSE_EVENT_BYTES });
+}
+
 function publish(type, data) {
   let event = { protocol: 'watchdogs.local.v1', event_id: randomBytes(12).toString('hex'), type, timestamp: new Date().toISOString(), data };
   // Standard SSE IDs let EventSource send Last-Event-ID after a reconnect.
@@ -232,8 +246,7 @@ function publish(type, data) {
     };
     payload = `id: ${event.event_id}\nevent: reset\ndata: ${JSON.stringify(event)}\n\n`;
   }
-  eventHistory.push({ id: event.event_id, payload });
-  if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+  rememberEvent({ id: event.event_id, payload });
   for (const res of clients) {
     if (!writeSsePayload(res, payload)) clients.delete(res);
   }
@@ -360,8 +373,7 @@ const server = createServer(async (req, res) => {
           // Advance the replay cursor after an expired/invalid Last-Event-ID.
           // Without retaining this reset marker, native EventSource clients that
           // reconnect without custom reset handling would receive reset forever.
-          eventHistory.push({ id: reset.event_id, payload });
-          if (eventHistory.length > MAX_SSE_HISTORY_EVENTS) eventHistory.shift();
+          rememberEvent({ id: reset.event_id, payload });
           if (!writeSsePayload(res, payload)) cleanup();
         } else {
           for (const item of eventHistory.slice(index + 1)) {
