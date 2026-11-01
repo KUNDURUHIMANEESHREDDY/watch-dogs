@@ -1347,3 +1347,6 @@ worth reusing. Autonomy is only defensible because refusing happens in code that
 does not consult whatever proposed the action. If you fork this, keep that
 separation intact.
 
+## Local dashboard event replay durability
+
+The local gateway keeps a bounded SSE cursor history in its data directory so a browser can resume after a gateway process restart. Writes use a private temporary file, file fsync and atomic rename. On POSIX, the containing directory is also fsynced after rename so the replacement directory entry is committed before the gateway reports durable replay as healthy. Windows supports the tested process-restart replay path, but Node does not provide a portable directory-fsync operation here; power-loss durability is therefore not claimed on Windows. If history validation or persistence fails, the gateway advertises durable replay as unavailable and clients must use the snapshot-reset path.
