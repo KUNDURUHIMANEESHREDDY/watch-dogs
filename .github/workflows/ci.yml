@@ -128,12 +128,20 @@ jobs:
       - name: Build frontend
         run: npm run web:build
 
+  security:
+    name: Security verification
+    uses: ./.github/workflows/security.yml
+    permissions:
+      contents: read
+      security-events: write
+
   required:
     name: required
-    # This aggregate is the single check repository Settings should require.
-    # It fails closed if any CI job fails, is cancelled, or is unexpectedly skipped.
+    # The single protected branch context must include application and security checks.
+    # It fails closed if any CI job or the reusable security workflow fails, is cancelled,
+    # or is unexpectedly skipped.
     if: always()
-    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e]
+    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e, security]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -143,13 +151,17 @@ jobs:
           FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
           GATEWAY_E2E_RESULT: ${{ needs.gateway-e2e.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        shell: bash
         run: |
           set -euo pipefail
           echo "core-tests: $CORE_TESTS_RESULT"
           echo "frontend-e2e: $FRONTEND_E2E_RESULT"
           echo "frontend-build: $FRONTEND_BUILD_RESULT"
           echo "gateway-e2e: $GATEWAY_E2E_RESULT"
+          echo "security: $SECURITY_RESULT"
           test "$CORE_TESTS_RESULT" = "success"
           test "$FRONTEND_E2E_RESULT" = "success"
           test "$FRONTEND_BUILD_RESULT" = "success"
           test "$GATEWAY_E2E_RESULT" = "success"
+          test "$SECURITY_RESULT" = "success"

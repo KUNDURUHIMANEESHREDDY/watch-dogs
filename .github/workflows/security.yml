@@ -1,9 +1,8 @@
 name: Security
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  # Called by CI so its result is included in the protected `required` check.
+  workflow_call:
   schedule:
     - cron: "23 6 * * 1"
   workflow_dispatch:
@@ -145,6 +144,7 @@ jobs:
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
+        shell: bash
         run: |
           set -euo pipefail
           printf 'Dependency audit: %s\\n' "$DEPENDENCY_AUDIT_RESULT"
