@@ -22,7 +22,7 @@ export function readJsonBody(req, maxBytes) {
     };
 
     const declaredLength = req.headers?.['content-length'];
-    if (declaredLength !== undefined && /^\d+$/.test(String(declaredLength))) {
+    if (declaredLength !== undefined && /^\\d+$/.test(String(declaredLength))) {
       const declaredBytes = Number(declaredLength);
       if (Number.isSafeInteger(declaredBytes) && declaredBytes > maxBytes) {
         fail(Object.assign(new Error('request body too large'), { status: 413 }), true);
@@ -45,7 +45,11 @@ export function readJsonBody(req, maxBytes) {
       if (settled) return;
       let parsed;
       try {
-        const raw = Buffer.concat(chunks, totalBytes).toString('utf8');
+        // JSON exchanged over HTTP is UTF-8. A permissive Buffer decoder
+        // replaces malformed byte sequences with U+FFFD, which can silently
+        // turn invalid wire data into a different, parseable JSON document.
+        const raw = new TextDecoder('utf-8', { fatal: true })
+          .decode(Buffer.concat(chunks, totalBytes));
         parsed = raw ? JSON.parse(raw) : {};
       } catch {
         fail(Object.assign(new Error('invalid JSON'), { status: 400 }));
