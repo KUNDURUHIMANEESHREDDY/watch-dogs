@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadEventHistory, persistEventHistory } from '../src/agent/event-history.mjs';
@@ -83,4 +83,23 @@ test('invalid or oversized event payloads are never persisted', async t => {
 test('invalid retention configuration is rejected', () => {
   assert.throws(() => loadEventHistory('unused', { maxEvents: 0 }), /maxEvents/);
   assert.throws(() => persistEventHistory('unused', [], { maxBytes: 0 }), /maxBytes/);
+});
+
+test('symlinked history files fail closed', async t => {
+  const path = await withHistory(t);
+  const target = path + '.target';
+  await writeFile(target, JSON.stringify(event('000000000000000000000031')) + '\\n', 'utf8');
+  try {
+    await symlink(target, path);
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP', 'ENOSYS'].includes(error?.code)) {
+      t.skip('symlink creation is not permitted on this runner');
+      return;
+    }
+    throw error;
+  }
+
+  const loaded = loadEventHistory(path);
+  assert.equal(loaded.healthy, false);
+  assert.deepEqual(loaded.events, []);
 });
