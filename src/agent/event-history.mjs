@@ -108,10 +108,24 @@ export function loadEventHistory(path, options = {}) {
   }
 }
 
+function syncParentDirectory(path) {
+  // POSIX filesystems require the containing directory to be synced after
+  // rename if the new directory entry must survive a sudden power loss.
+  // Node does not expose portable directory fsync on Windows.
+  if (process.platform === 'win32') return;
+  let directoryFd;
+  try {
+    directoryFd = openSync(dirname(path), constants.O_RDONLY | (constants.O_DIRECTORY ?? 0));
+    fsyncSync(directoryFd);
+  } finally {
+    if (directoryFd !== undefined) closeSync(directoryFd);
+  }
+}
+
 /**
- * Persist the complete bounded cursor ring using write+fsync+rename. The temp
- * file is private to the current process and never overwrites the target until
- * a complete replacement has been written.
+ * Persist the complete bounded cursor ring using write+fsync+rename. POSIX
+ * also syncs the parent directory so the replacement entry is durable. Windows
+ * supports process-restart replay here, but no power-loss durability claim.
  */
 export function persistEventHistory(path, events, options = {}) {
   const { maxEvents, maxBytes, maxEventBytes } = limits(options);
@@ -140,6 +154,7 @@ export function persistEventHistory(path, events, options = {}) {
     closeSync(fd);
     fd = undefined;
     renameSync(temporary, path);
+    syncParentDirectory(path);
     return true;
   } catch {
     if (fd !== undefined) {
