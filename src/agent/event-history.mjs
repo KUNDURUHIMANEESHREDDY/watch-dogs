@@ -3,6 +3,7 @@ import {
   constants,
   fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -61,10 +62,19 @@ export function loadEventHistory(path, options = {}) {
   const { maxEvents, maxBytes, maxEventBytes } = limits(options);
   let fd;
   try {
+    const linkStat = lstatSync(path);
+    if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > maxBytes) {
+      return { events: [], healthy: false };
+    }
     const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
     fd = openSync(path, flags);
     const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > maxBytes) return { events: [], healthy: false };
+    // O_NOFOLLOW is not available on every supported platform. Compare the
+    // opened descriptor with the pre-open path identity as a second guard.
+    if (!stat.isFile() || stat.size > maxBytes ||
+        (linkStat.dev !== stat.dev || linkStat.ino !== stat.ino)) {
+      return { events: [], healthy: false };
+    }
     const content = readFileSync(fd, 'utf8');
     if (Buffer.byteLength(content, 'utf8') > maxBytes) return { events: [], healthy: false };
     if (!content) return { events: [], healthy: true };
