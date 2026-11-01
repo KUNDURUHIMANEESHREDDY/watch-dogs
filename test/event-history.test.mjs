@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { loadEventHistory, persistEventHistory } from '../src/agent/event-history.mjs';
 
 function event(id, type = 'finding') {
@@ -39,6 +39,17 @@ test('bounded SSE cursor history survives a gateway-process reinitialization', a
   assert.deepEqual(restarted.events, [first, second]);
   assert.equal(restarted.events[0].id, first.id);
   assert.match(restarted.events[1].payload, /TEST_EVENT/);
+});
+
+test('atomic replacements leave only the canonical history file', async t => {
+  const path = await withHistory(t);
+  const first = event('000000000000000000000041');
+  const second = event('000000000000000000000042');
+
+  assert.equal(persistEventHistory(path, [first]), true);
+  assert.equal(persistEventHistory(path, [second]), true);
+  assert.deepEqual(await readdir(dirname(path)), ['finding-events.jsonl']);
+  assert.deepEqual(loadEventHistory(path).events, [second]);
 });
 
 test('history retention and serialized bytes remain bounded', async t => {
