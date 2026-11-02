@@ -14,13 +14,13 @@ export function readBoundedLogTail(path, {
   maxLineChars = MAX_LOG_LINE_CHARS,
 } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_LOG_TAIL_BYTES) {
-    throw new RangeError(`maxBytes must be between 1 and ${MAX_LOG_TAIL_BYTES}`);
+    throw new RangeError('maxBytes must be between 1 and ' + MAX_LOG_TAIL_BYTES);
   }
   if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > MAX_LOG_TAIL_LINES) {
-    throw new RangeError(`maxLines must be between 1 and ${MAX_LOG_TAIL_LINES}`);
+    throw new RangeError('maxLines must be between 1 and ' + MAX_LOG_TAIL_LINES);
   }
   if (!Number.isSafeInteger(maxLineChars) || maxLineChars < 1 || maxLineChars > MAX_LOG_LINE_CHARS) {
-    throw new RangeError(`maxLineChars must be between 1 and ${MAX_LOG_LINE_CHARS}`);
+    throw new RangeError('maxLineChars must be between 1 and ' + MAX_LOG_LINE_CHARS);
   }
 
   let fd;
@@ -67,12 +67,12 @@ export function readBoundedLogTail(path, {
     let text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (start > 0) {
-      const firstLineEnd = text.indexOf('\\n');
+      const firstLineEnd = text.indexOf('\n');
       text = firstLineEnd === -1 ? '' : text.slice(firstLineEnd + 1);
     }
 
     return text
-      .split(/\\r?\\n/)
+      .split(/\r?\n/)
       .filter(Boolean)
       .slice(-maxLines)
       .map((line) => {
@@ -81,7 +81,7 @@ export function readBoundedLogTail(path, {
         // The configured cap applies to the returned line, including its marker.
         // For very small caps there is no room for the marker, so return a safe prefix.
         return maxLineChars > marker.length
-          ? `${line.slice(0, maxLineChars - marker.length)}${marker}`
+          ? line.slice(0, maxLineChars - marker.length) + marker
           : line.slice(0, maxLineChars);
       });
   } catch (error) {
