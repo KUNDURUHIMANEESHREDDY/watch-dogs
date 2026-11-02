@@ -15,8 +15,12 @@ concurrency:
 
 jobs:
   core-tests:
-    name: Core tests and sandbox verification
-    runs-on: windows-latest
+    name: Core tests and sandbox verification (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - name: Check out source
