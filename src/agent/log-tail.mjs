@@ -28,29 +28,37 @@ export function readBoundedLogTail(path, {
     const linkStats = lstatSync(path);
     if (!linkStats.isFile() || linkStats.isSymbolicLink()) return [];
 
-    // O_NOFOLLOW closes the lstat/open symlink race on POSIX. On Windows,
-    // re-check the pathname against the opened file descriptor below.
+    // O_NOFOLLOW blocks symlink substitution on POSIX. Descriptor identity
+    // checks below also reject replacement with a different regular file,
+    // including on platforms where O_NOFOLLOW is unavailable.
     const flags = process.platform === 'win32'
       ? 'r'
       : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
     fd = openSync(path, flags);
     const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.size === 0) return [];
+    if (
+      !stats.isFile()
+      || stats.dev !== linkStats.dev
+      || stats.ino !== linkStats.ino
+    ) return [];
 
-    if (!constants.O_NOFOLLOW) {
-      let currentStats;
-      try {
-        currentStats = lstatSync(path);
-      } catch {
-        return [];
-      }
-      if (
-        currentStats.isSymbolicLink()
-        || !currentStats.isFile()
-        || currentStats.dev !== stats.dev
-        || currentStats.ino !== stats.ino
-      ) return [];
+    // Confirm that the pathname still identifies the opened descriptor. This
+    // closes the regular-file swap window after open without changing which
+    // already-open file descriptor is used for the bounded read.
+    let currentStats;
+    try {
+      currentStats = lstatSync(path);
+    } catch {
+      return [];
     }
+    if (
+      currentStats.isSymbolicLink()
+      || !currentStats.isFile()
+      || currentStats.dev !== stats.dev
+      || currentStats.ino !== stats.ino
+    ) return [];
+
+    if (stats.size === 0) return [];
 
     const start = Math.max(0, stats.size - maxBytes);
     const length = Math.min(stats.size, maxBytes);
@@ -59,12 +67,12 @@ export function readBoundedLogTail(path, {
     let text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (start > 0) {
-      const firstLineEnd = text.indexOf('\n');
+      const firstLineEnd = text.indexOf('\\n');
       text = firstLineEnd === -1 ? '' : text.slice(firstLineEnd + 1);
     }
 
     return text
-      .split(/\r?\n/)
+      .split(/\\r?\\n/)
       .filter(Boolean)
       .slice(-maxLines)
       .map((line) => {
