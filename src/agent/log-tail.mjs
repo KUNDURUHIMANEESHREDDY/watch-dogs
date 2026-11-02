@@ -28,12 +28,15 @@ export function readBoundedLogTail(path, {
     const linkStats = lstatSync(path);
     if (!linkStats.isFile() || linkStats.isSymbolicLink()) return [];
 
-    // O_NOFOLLOW blocks symlink substitution on POSIX. Descriptor identity
-    // checks below also reject replacement with a different regular file,
-    // including on platforms where O_NOFOLLOW is unavailable.
+    // O_NOFOLLOW blocks symlink substitution on POSIX. O_NONBLOCK prevents a
+    // regular log path swapped for a FIFO between lstat and open from hanging
+    // the caller. It has no effect on ordinary regular-file reads. Descriptor
+    // identity checks below also reject replacement with another regular file.
     const flags = process.platform === 'win32'
       ? 'r'
-      : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+      : constants.O_RDONLY
+        | (constants.O_NOFOLLOW ?? 0)
+        | (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, flags);
     const stats = fstatSync(fd);
     if (
@@ -67,12 +70,12 @@ export function readBoundedLogTail(path, {
     let text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (start > 0) {
-      const firstLineEnd = text.indexOf('\n');
+      const firstLineEnd = text.indexOf('\\n');
       text = firstLineEnd === -1 ? '' : text.slice(firstLineEnd + 1);
     }
 
     return text
-      .split(/\r?\n/)
+      .split(/\\r?\\n/)
       .filter(Boolean)
       .slice(-maxLines)
       .map((line) => {
