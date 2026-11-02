@@ -70,12 +70,12 @@ export function readBoundedLogTail(path, {
     let text = buffer.subarray(0, bytesRead).toString('utf8');
 
     if (start > 0) {
-      const firstLineEnd = text.indexOf('\\n');
+      const firstLineEnd = text.indexOf('\n');
       text = firstLineEnd === -1 ? '' : text.slice(firstLineEnd + 1);
     }
 
     return text
-      .split(/\\r?\\n/)
+      .split(/\r?\n/)
       .filter(Boolean)
       .slice(-maxLines)
       .map((line) => {
