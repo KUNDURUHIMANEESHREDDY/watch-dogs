@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -105,6 +106,52 @@ test('log tail rejects a regular-file replacement between lstat and open', (t) =
     try {
       assert.deepEqual(readBoundedLogTail(path), []);
       assert.equal(swapped, true, 'the test must replace the path after its initial lstat');
+    } finally {
+      openMock.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+});
+
+test('log tail does not block when a regular file is replaced with a FIFO before open', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX FIFO semantics are not available on Windows');
+    return;
+  }
+
+  withTempDir((dir) => {
+    const path = join(dir, 'daemon.log');
+    const originalPath = join(dir, 'daemon-original.log');
+    const fifoPath = join(dir, 'replacement.fifo');
+    writeFileSync(path, 'original log content\n');
+
+    try {
+      execFileSync('mkfifo', [fifoPath], { stdio: 'ignore' });
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error?.code === 'EACCES' || error?.code === 'EPERM') {
+        t.skip('mkfifo is unavailable in this runner');
+        return;
+      }
+      throw error;
+    }
+
+    let swapped = false;
+    const originalOpenSync = fs.openSync;
+    const openMock = t.mock.method(fs, 'openSync', (candidatePath, flags, mode) => {
+      if (String(candidatePath) === path && !swapped) {
+        swapped = true;
+        renameSync(path, originalPath);
+        renameSync(fifoPath, path);
+        assert.equal(typeof flags, 'number');
+        assert.notEqual(flags & fs.constants.O_NONBLOCK, 0, 'POSIX log opens must be nonblocking');
+      }
+      return originalOpenSync(candidatePath, flags, mode);
+    });
+
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(readBoundedLogTail(path), []);
+      assert.equal(swapped, true, 'the test must replace the path with a FIFO after its initial lstat');
     } finally {
       openMock.mock.restore();
       syncBuiltinESMExports();
