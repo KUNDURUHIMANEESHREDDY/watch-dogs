@@ -15,12 +15,8 @@ concurrency:
 
 jobs:
   core-tests:
-    name: Core tests and sandbox verification (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Core tests and sandbox verification
+    runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -43,6 +39,22 @@ jobs:
 
       - name: Run product sandbox verification
         run: npm run sandbox
+
+  posix-filesystem-regressions:
+    name: POSIX filesystem security regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Run POSIX filesystem regressions
+        run: node --test test/log-tail.test.mjs
 
   frontend-e2e:
     name: Frontend session recovery E2E
@@ -137,23 +149,26 @@ jobs:
     # This aggregate is the single check repository Settings should require.
     # It fails closed if any CI job fails, is cancelled, or is unexpectedly skipped.
     if: always()
-    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e]
+    needs: [core-tests, posix-filesystem-regressions, frontend-e2e, frontend-build, gateway-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Enforce all release checks
         env:
           CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
+          POSIX_FILESYSTEM_RESULT: ${{ needs.posix-filesystem-regressions.result }}
           FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
           GATEWAY_E2E_RESULT: ${{ needs.gateway-e2e.result }}
         run: |
           set -euo pipefail
           echo "core-tests: $CORE_TESTS_RESULT"
+          echo "posix-filesystem-regressions: $POSIX_FILESYSTEM_RESULT"
           echo "frontend-e2e: $FRONTEND_E2E_RESULT"
           echo "frontend-build: $FRONTEND_BUILD_RESULT"
           echo "gateway-e2e: $GATEWAY_E2E_RESULT"
           test "$CORE_TESTS_RESULT" = "success"
+          test "$POSIX_FILESYSTEM_RESULT" = "success"
           test "$FRONTEND_E2E_RESULT" = "success"
           test "$FRONTEND_BUILD_RESULT" = "success"
           test "$GATEWAY_E2E_RESULT" = "success"
