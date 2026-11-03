@@ -144,10 +144,13 @@ export function persistEventHistory(path, events, options = {}) {
     : '';
   if (Buffer.byteLength(content, 'utf8') > maxBytes) return false;
 
-  mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
   let fd;
   try {
+    // Directory creation is part of persistence and must fail closed like the
+    // later write/rename/fsync operations. A replaced or unavailable parent
+    // must not escape into the gateway's event-publishing path.
+    mkdirSync(dirname(path), { recursive: true });
     fd = openSync(temporary, 'wx', 0o600);
     writeFileSync(fd, content, 'utf8');
     fsyncSync(fd);
