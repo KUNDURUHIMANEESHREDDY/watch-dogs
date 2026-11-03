@@ -114,3 +114,15 @@ test('symlinked history files fail closed', async t => {
   assert.equal(loaded.healthy, false);
   assert.deepEqual(loaded.events, []);
 });
+
+
+test('directory preparation failures return unavailable without escaping persistence', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'wd-event-history-blocked-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const blockedParent = join(directory, 'not-a-directory');
+  await writeFile(blockedParent, 'preserve this file', 'utf8');
+  const path = join(blockedParent, 'finding-events.jsonl');
+
+  assert.equal(persistEventHistory(path, [event('000000000000000000000051')]), false);
+  assert.equal(await readFile(blockedParent, 'utf8'), 'preserve this file');
+});
