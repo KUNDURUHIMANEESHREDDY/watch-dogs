@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { readJournal } from './journal-reader.mjs';
 import { readBoundedLogTail } from './log-tail.mjs';
+import { readBoundedDirectoryNames } from './directory-list.mjs';
 import { readBoundedJsonlLines } from './findings-reader.mjs';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,7 +159,7 @@ function snapshot() {
     if (existsSync(file)) logs = readBoundedLogTail(file).map((line, i) => ({ id: i, line }));
   } catch {}
   let dataFiles = [];
-  try { dataFiles = readdirSync(cfg.paths.data).slice(0, 100); } catch {}
+  try { dataFiles = readBoundedDirectoryNames(cfg.paths.data); } catch {}
   const findings = readFindings();
   const verifications = findings.filter(record => record.advisor?.verification).map(record => ({ id: record.id, title: record.title, status: record.advisor.verification.evidence || record.advisor.verification.verdict, verdict: record.advisor.verification.verdict, evidence: record.advisor.verification.why || record.advisor.verification.evidence, at: record.at }));
   const journal = readJournal(cfg.paths.data, cfg.projectRoot);
