@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -96,7 +97,24 @@ test('invalid retention configuration is rejected', () => {
   assert.throws(() => persistEventHistory('unused', [], { maxBytes: 0 }), /maxBytes/);
 });
 
-test('symlinked history files fail closed', async t => {
+test('FIFO history paths fail closed without blocking', async t => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX FIFO creation is not available on Windows');
+    return;
+  }
+  const path = await withHistory(t);
+  const created = spawnSync('mkfifo', [path], { encoding: 'utf8' });
+  if (created.error || created.status !== 0) {
+    t.skip('mkfifo is unavailable on this runner');
+    return;
+  }
+
+  const loaded = loadEventHistory(path);
+  assert.equal(loaded.healthy, false);
+  assert.deepEqual(loaded.events, []);
+});
+
+test('symlinked history files fail closed', async t =>
   const path = await withHistory(t);
   const target = path + '.target';
   await writeFile(target, JSON.stringify(event('000000000000000000000031')) + '\\n', 'utf8');
