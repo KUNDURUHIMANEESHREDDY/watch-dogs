@@ -114,7 +114,7 @@ test('FIFO history paths fail closed without blocking', async t => {
   assert.deepEqual(loaded.events, []);
 });
 
-test('symlinked history files fail closed', async t =>
+test('symlinked history files fail closed', async t => {
   const path = await withHistory(t);
   const target = path + '.target';
   await writeFile(target, JSON.stringify(event('000000000000000000000031')) + '\\n', 'utf8');
