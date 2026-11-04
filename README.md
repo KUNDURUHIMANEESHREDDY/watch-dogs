@@ -1347,3 +1347,7 @@ worth reusing. Autonomy is only defensible because refusing happens in code that
 does not consult whatever proposed the action. If you fork this, keep that
 separation intact.
 
+
+## Durable dashboard event replay
+
+The local gateway retains a bounded, sanitized SSE cursor history in its data directory so an authenticated browser can resume after a gateway process restart. The history is capped at 128 events, 3 MiB total, and 16 KiB per event; malformed, oversized, symlinked, duplicate, or non-regular history is rejected and clients must refresh the authenticated snapshot. Writes use a private exclusive temporary file, file fsync, and atomic rename. On POSIX the parent directory is fsynced after rename before durable replay is reported healthy. Windows supports process-restart replay but this implementation makes no power-loss durability claim there. The protected `required` aggregate invokes the reusable Security workflow so dependency audit, full-history Gitleaks, SBOM, and CodeQL are release-blocking rather than merely parallel informational checks.
