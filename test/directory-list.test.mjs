@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_DIRECTORY_NAMES, readBoundedDirectoryNames } from '../src/agent/directory-list.mjs';
+import {
+  MAX_DIRECTORY_NAMES,
+  collectBoundedDirectoryNames,
+  readBoundedDirectoryNames,
+} from '../src/agent/directory-list.mjs';
 
 test('directory listing stops at the configured maximum without materializing every entry', () => {
   const root = mkdtempSync(join(tmpdir(), 'watchdogs-directory-list-'));
@@ -34,4 +38,37 @@ test('directory listing honors smaller limits and rejects invalid limits', () =>
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('bounded directory iteration never reads beyond the requested limit and closes once', () => {
+  let reads = 0;
+  let closes = 0;
+  const names = collectBoundedDirectoryNames({
+    readSync() {
+      reads += 1;
+      return { name: `entry-${reads}.json` };
+    },
+    closeSync() {
+      closes += 1;
+    },
+  }, 3);
+
+  assert.deepEqual(names, ['entry-1.json', 'entry-2.json', 'entry-3.json']);
+  assert.equal(reads, 3);
+  assert.equal(closes, 1);
+});
+
+test('bounded directory iteration closes the handle when reading throws', () => {
+  let closes = 0;
+  const directory = {
+    readSync() {
+      throw new Error('directory read failed');
+    },
+    closeSync() {
+      closes += 1;
+    },
+  };
+
+  assert.throws(() => collectBoundedDirectoryNames(directory, 3), /directory read failed/);
+  assert.equal(closes, 1);
 });
