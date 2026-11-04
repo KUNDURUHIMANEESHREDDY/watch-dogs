@@ -66,7 +66,10 @@ export function loadEventHistory(path, options = {}) {
     if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > maxBytes) {
       return { events: [], healthy: false };
     }
-    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+    // A regular file can be replaced by a FIFO after lstat and before open.
+    // O_NONBLOCK prevents gateway startup from hanging on that race; fstat
+    // below still rejects the opened non-regular descriptor.
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, flags);
     const stat = fstatSync(fd);
     // O_NOFOLLOW is not available on every supported platform. Compare the
