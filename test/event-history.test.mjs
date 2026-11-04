@@ -1,5 +1,7 @@
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import fs, { renameSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -97,21 +99,48 @@ test('invalid retention configuration is rejected', () => {
   assert.throws(() => persistEventHistory('unused', [], { maxBytes: 0 }), /maxBytes/);
 });
 
-test('FIFO history paths fail closed without blocking', async t => {
+test('event history does not block when a regular file is replaced with a FIFO before open', async t => {
   if (process.platform === 'win32') {
-    t.skip('POSIX FIFO creation is not available on Windows');
-    return;
-  }
-  const path = await withHistory(t);
-  const created = spawnSync('mkfifo', [path], { encoding: 'utf8' });
-  if (created.error || created.status !== 0) {
-    t.skip('mkfifo is unavailable on this runner');
+    t.skip('POSIX FIFO semantics are not available on Windows');
     return;
   }
 
-  const loaded = loadEventHistory(path);
-  assert.equal(loaded.healthy, false);
-  assert.deepEqual(loaded.events, []);
+  const path = await withHistory(t);
+  const originalPath = path + '.original';
+  const fifoPath = path + '.fifo';
+  await writeFile(path, 'regular placeholder\\n', 'utf8');
+
+  try {
+    execFileSync('mkfifo', [fifoPath], { stdio: 'ignore' });
+  } catch (error) {
+    if (['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) {
+      t.skip('mkfifo is unavailable on this runner');
+      return;
+    }
+    throw error;
+  }
+
+  let swapped = false;
+  const originalOpenSync = fs.openSync;
+  const openMock = t.mock.method(fs, 'openSync', (candidatePath, flags, mode) => {
+    if (String(candidatePath) === path && !swapped) {
+      swapped = true;
+      renameSync(path, originalPath);
+      renameSync(fifoPath, path);
+      assert.equal(typeof flags, 'number');
+      assert.notEqual(flags & fs.constants.O_NONBLOCK, 0, 'event-history reads must be nonblocking');
+    }
+    return originalOpenSync(candidatePath, flags, mode);
+  });
+
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(loadEventHistory(path), { events: [], healthy: false });
+    assert.equal(swapped, true, 'the test must replace the path after its initial lstat');
+  } finally {
+    openMock.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
 
 test('symlinked history files fail closed', async t => {
