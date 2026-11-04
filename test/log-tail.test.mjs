@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,6 +12,7 @@ import {
   MAX_LOG_TAIL_LINES,
   readBoundedLogTail,
 } from '../src/agent/log-tail.mjs';
+import { readBoundedDirectoryNames, MAX_DIRECTORY_NAMES } from '../src/agent/directory-list.mjs';
 
 function withTempDir(run) {
   const dir = mkdtempSync(join(tmpdir(), 'watchdogs-log-tail-'));
@@ -156,5 +157,28 @@ test('log tail does not block when a regular file is replaced with a FIFO before
       openMock.mock.restore();
       syncBuiltinESMExports();
     }
+  });
+});
+
+
+test('combined gateway snapshot inputs remain bounded across directory and log readers', (t) => {
+  withTempDir((root) => {
+    const dataDirectory = join(root, 'data');
+    mkdirSync(dataDirectory);
+    for (let index = 0; index < 250; index += 1) {
+      writeFileSync(join(dataDirectory, `entry-${String(index).padStart(3, '0')}.json`), '{}');
+    }
+
+    const names = readBoundedDirectoryNames(dataDirectory);
+    assert.equal(names.length, MAX_DIRECTORY_NAMES);
+    assert.equal(new Set(names).size, MAX_DIRECTORY_NAMES);
+    assert.ok(names.every((name) => name.endsWith('.json')));
+
+    const logPath = join(root, 'daemon.log');
+    writeFileSync(logPath, Array.from({ length: 120 }, (_, index) => `line-${index}`).join('\n') + '\n');
+    const tail = readBoundedLogTail(logPath);
+    assert.equal(tail.length, MAX_LOG_TAIL_LINES);
+    assert.equal(tail[0], 'line-40');
+    assert.equal(tail.at(-1), 'line-119');
   });
 });
