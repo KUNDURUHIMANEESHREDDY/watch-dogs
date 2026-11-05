@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,7 +101,6 @@ test('findings reader rejects a regular-file replacement between lstat and open'
   });
 });
 
-
 test('findings reader never exceeds the byte cap at the exact maxBytes + 1 boundary', () => {
   withTempDir((dir) => {
     const path = join(dir, 'findings.jsonl');
@@ -113,5 +113,51 @@ test('findings reader never exceeds the byte cap at the exact maxBytes + 1 bound
       Buffer.byteLength(lines.join('\n') + '\n', 'utf8') <= 7,
       'returned JSONL tail must stay within the configured byte limit',
     );
+  });
+});
+
+test('findings reader does not block when a regular file is replaced with a FIFO before open', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('POSIX FIFO semantics are not available on Windows');
+    return;
+  }
+
+  withTempDir((dir) => {
+    const path = join(dir, 'findings.jsonl');
+    const originalPath = join(dir, 'findings-original.jsonl');
+    const fifoPath = join(dir, 'findings.fifo');
+    writeFileSync(path, '{"id":"regular"}\n');
+
+    try {
+      execFileSync('mkfifo', [fifoPath], { stdio: 'ignore' });
+    } catch (error) {
+      if (['ENOENT', 'EACCES', 'EPERM'].includes(error?.code)) {
+        t.skip('mkfifo is unavailable on this runner');
+        return;
+      }
+      throw error;
+    }
+
+    let swapped = false;
+    const originalOpenSync = fs.openSync;
+    const openMock = t.mock.method(fs, 'openSync', (candidatePath, flags, mode) => {
+      if (String(candidatePath) === path && !swapped) {
+        swapped = true;
+        renameSync(path, originalPath);
+        renameSync(fifoPath, path);
+        assert.equal(typeof flags, 'number');
+        assert.notEqual(flags & fs.constants.O_NONBLOCK, 0, 'findings reads must be nonblocking');
+      }
+      return originalOpenSync(candidatePath, flags, mode);
+    });
+
+    syncBuiltinESMExports();
+    try {
+      assert.deepEqual(readBoundedJsonlLines(path), []);
+      assert.equal(swapped, true, 'test must replace the path after initial lstat');
+    } finally {
+      openMock.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 });
