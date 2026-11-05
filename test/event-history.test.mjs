@@ -143,6 +143,35 @@ test('event history does not block when a regular file is replaced with a FIFO b
   }
 });
 
+test('event history bounds reads when the file grows after descriptor stat', async t => {
+  const path = await withHistory(t);
+  const options = { maxEvents: 4, maxBytes: 512, maxEventBytes: 256 };
+  await writeFile(path, JSON.stringify(event('000000000000000000000061')) + '\\n', 'utf8');
+
+  let appended = false;
+  let maxRequested = 0;
+  const originalReadSync = fs.readSync;
+  const readMock = t.mock.method(fs, 'readSync', (fd, buffer, offset, length, position) => {
+    if (!appended) {
+      appended = true;
+      writeFileSync(path, 'x'.repeat(options.maxBytes * 4), { flag: 'a' });
+    }
+    maxRequested = Math.max(maxRequested, length);
+    return originalReadSync(fd, buffer, offset, length, position);
+  });
+
+  syncBuiltinESMExports();
+  try {
+    const loaded = loadEventHistory(path, options);
+    assert.equal(appended, true, 'the file must grow after fstat and before the first read');
+    assert.equal(maxRequested, options.maxBytes + 1, 'the reader must request no more than the configured cap plus one byte');
+    assert.equal(loaded.healthy, false, 'growth beyond the configured byte cap must fail closed');
+    assert.deepEqual(loaded.events, []);
+  } finally {
+    readMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 test('symlinked history files fail closed', async t => {
   const path = await withHistory(t);
   const target = path + '.target';
