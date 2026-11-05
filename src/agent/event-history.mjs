@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { TextDecoder } from 'node:util';
 
 const DEFAULT_MAX_EVENTS = 128;
 const DEFAULT_MAX_BYTES = 3 * 1024 * 1024;
@@ -92,7 +93,15 @@ export function loadEventHistory(path, options = {}) {
     if (bytesRead > maxBytes) return { events: [], healthy: false };
     if (bytesRead === 0) return { events: [], healthy: true };
 
-    const content = buffer.subarray(0, bytesRead).toString('utf8');
+    let content;
+    try {
+      // Buffer.toString('utf8') silently replaces malformed byte sequences. A
+      // replacement character can leave the JSON valid while corrupting an SSE
+      // payload, so persisted history must be decoded strictly and fail closed.
+      content = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    } catch {
+      return { events: [], healthy: false };
+    }
     const lines = content.split('\n');
     if (lines.at(-1) === '') lines.pop();
     if (lines.length > maxEvents) return { events: [], healthy: false };
