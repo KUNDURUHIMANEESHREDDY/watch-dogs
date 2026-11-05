@@ -146,7 +146,7 @@ test('event history does not block when a regular file is replaced with a FIFO b
 test('event history bounds reads when the file grows after descriptor stat', async t => {
   const path = await withHistory(t);
   const options = { maxEvents: 4, maxBytes: 512, maxEventBytes: 256 };
-  await writeFile(path, JSON.stringify(event('000000000000000000000061')) + '\\n', 'utf8');
+  await writeFile(path, JSON.stringify(event('000000000000000000000061')) + '\n', 'utf8');
 
   let appended = false;
   let maxRequested = 0;
