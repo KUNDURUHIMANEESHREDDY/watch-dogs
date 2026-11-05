@@ -93,7 +93,7 @@ export function loadEventHistory(path, options = {}) {
     if (bytesRead === 0) return { events: [], healthy: true };
 
     const content = buffer.subarray(0, bytesRead).toString('utf8');
-    const lines = content.split('\\n');
+    const lines = content.split('\n');
     if (lines.at(-1) === '') lines.pop();
     if (lines.length > maxEvents) return { events: [], healthy: false };
 
