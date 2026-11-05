@@ -87,11 +87,11 @@ export function readBoundedJsonlLines(
 
     let text = buffer.subarray(0, offset).toString('utf8');
     if (startsMidFile) {
-      const newline = text.indexOf('\\n');
+      const newline = text.indexOf('\n');
       text = newline < 0 ? '' : text.slice(newline + 1);
     }
 
-    return text.split(/\\r?\\n/).filter(Boolean).slice(-maxLines);
+    return text.split(/\r?\n/).filter(Boolean).slice(-maxLines);
   } finally {
     closeSync(fd);
   }
