@@ -80,6 +80,19 @@ test('corrupt history fails closed and requests a snapshot reset', async t => {
   assert.deepEqual(loaded.events, []);
 });
 
+test('invalid UTF-8 event history fails closed instead of replaying replacement characters', async t => {
+  const path = await withHistory(t);
+  const serialized = Buffer.from(JSON.stringify(event('000000000000000000000071')) + '\n', 'utf8');
+  const marker = Buffer.from('sanitized', 'utf8');
+  const offset = serialized.indexOf(marker);
+  assert.notEqual(offset, -1, 'the fixture must contain its evidence marker');
+  serialized[offset] = 0xff;
+  await writeFile(path, serialized);
+
+  const loaded = loadEventHistory(path);
+  assert.deepEqual(loaded, { events: [], healthy: false });
+});
+
 test('invalid or oversized event payloads are never persisted', async t => {
   const path = await withHistory(t);
   const valid = event('000000000000000000000021');
