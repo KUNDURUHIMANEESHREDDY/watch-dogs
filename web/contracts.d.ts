@@ -127,6 +127,8 @@ export interface GatewayCapabilities {
   findingsSnapshot: boolean;
   journalSnapshot: boolean;
   liveFindingEvents: boolean;
+  /** True when bounded SSE history is persisted for process-restart replay; POSIX parent-directory fsync additionally provides power-loss durability. */
+  durableEventReplay: boolean;
   repairExecution: boolean;
   note?: string;
 }
