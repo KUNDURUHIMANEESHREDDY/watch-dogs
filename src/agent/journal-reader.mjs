@@ -11,6 +11,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_JOURNAL_FILES = 200;
 const MAX_JOURNAL_ENTRY_BYTES = 256 * 1024;
+export const MAX_JOURNAL_TOTAL_BYTES = 4 * 1024 * 1024;
 const MAX_JOURNAL_RESULTS = 100;
 
 /**
@@ -42,11 +43,9 @@ function readNewestJournalNames(dir, limit) {
 }
 
 /**
- * Read a bounded journal snapshot for the local control center.
- *
- * Applier journal filenames begin with a base-36 timestamp, so lexical order
- * retains the newest candidate files. Oversized/corrupt entries are omitted:
- * this is an observability snapshot and must not make the health UI unavailable.
+ * Read one regular journal file, bounded by the caller's remaining byte budget.
+ * Return the exact number of bytes read so invalid UTF-8 cannot undercount the
+ * aggregate budget after replacement-character decoding.
  */
 function readBoundedRegularFile(path, maxBytes) {
   const initial = lstatSync(path);
@@ -84,12 +83,25 @@ function readBoundedRegularFile(path, maxBytes) {
       if (count === 0) break;
       offset += count;
     }
-    return buffer.subarray(0, offset).toString('utf8');
+    return {
+      content: buffer.subarray(0, offset).toString('utf8'),
+      bytes: offset,
+    };
   } finally {
     closeSync(fd);
   }
 }
 
+/**
+ * Read a bounded journal snapshot for the local control center.
+ *
+ * Applier journal filenames begin with a base-36 timestamp, so lexical order
+ * retains the newest candidate files. The aggregate byte budget is consumed
+ * newest-first: an old backlog cannot crowd out recent activity, and one
+ * snapshot can never allocate/parse more than MAX_JOURNAL_TOTAL_BYTES.
+ * Oversized/corrupt entries are omitted; this observability snapshot must not
+ * make the health UI unavailable.
+ */
 export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   const boundedLimit = Number.isSafeInteger(limit)
     ? Math.max(1, Math.min(limit, MAX_JOURNAL_RESULTS))
@@ -107,12 +119,21 @@ export function readJournal(dataDir, projectRoot, limit = MAX_JOURNAL_RESULTS) {
   }
 
   const entries = [];
-  for (const name of files) {
+  let remainingBytes = MAX_JOURNAL_TOTAL_BYTES;
+  // Filenames are timestamp-prefixed and sorted oldest-to-newest by the
+  // directory helper. Consume the budget from newest to oldest so retained
+  // history is useful even when older journal files are large.
+  for (const name of files.reverse()) {
+    if (remainingBytes <= 0) break;
     const path = join(dir, name);
     try {
-      const contents = readBoundedRegularFile(path, MAX_JOURNAL_ENTRY_BYTES);
-      if (contents === null) continue;
-      const entry = JSON.parse(contents);
+      const file = readBoundedRegularFile(
+        path,
+        Math.min(MAX_JOURNAL_ENTRY_BYTES, remainingBytes),
+      );
+      if (file === null) continue;
+      remainingBytes -= file.bytes;
+      const entry = JSON.parse(file.content);
       if (!entry || typeof entry !== 'object') continue;
 
       let target = null;

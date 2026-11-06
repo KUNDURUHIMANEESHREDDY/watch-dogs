@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readJournal } from '../src/agent/journal-reader.mjs';
+import { MAX_JOURNAL_TOTAL_BYTES, readJournal } from '../src/agent/journal-reader.mjs';
 
 test('journal snapshot bounds entry count and skips corrupt or oversized files', () => {
   const root = mkdtempSync(join(tmpdir(), 'watch-dogs-journal-reader-'));
@@ -142,6 +142,54 @@ test('journal reader keeps newest results after streaming more than five directo
     const entries = readJournal(dataDir, projectRoot);
     assert.equal(entries.length, 100);
     assert.deepEqual(entries.map(entry => entry.id), ids.slice(-100).reverse());
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('journal snapshot enforces an aggregate byte budget and keeps newest entries', () => {
+  const root = mkdtempSync(join(tmpdir(), 'watch-dogs-journal-byte-budget-'));
+  const dataDir = join(root, '.watchdog');
+  const journalDir = join(dataDir, 'journal');
+  const projectRoot = join(root, 'project');
+  mkdirSync(journalDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+
+  try {
+    const base = Date.now();
+    const reason = 'x'.repeat(100 * 1024);
+    const sample = JSON.stringify({
+      id: 'entry-000',
+      at: new Date(base).toISOString(),
+      outcome: 'verified',
+      type: 'patch',
+      abs: join(projectRoot, 'file.js'),
+      why: reason
+    });
+    const entryBytes = Buffer.byteLength(sample);
+    assert.ok(entryBytes < 256 * 1024, 'each fixture must fit the per-entry cap');
+    const expectedCount = Math.floor(MAX_JOURNAL_TOTAL_BYTES / entryBytes);
+    const ids = [];
+
+    for (let i = 0; i < 50; i += 1) {
+      const id = `entry-${String(i).padStart(3, '0')}`;
+      ids.push(id);
+      const contents = JSON.stringify({
+        id,
+        at: new Date(base + i).toISOString(),
+        outcome: 'verified',
+        type: 'patch',
+        abs: join(projectRoot, 'file.js'),
+        why: reason
+      });
+      assert.equal(Buffer.byteLength(contents), entryBytes);
+      writeFileSync(join(journalDir, `${(base + i).toString(36).padStart(10, '0')}-${id}.json`), contents);
+    }
+
+    const entries = readJournal(dataDir, projectRoot, 100);
+    assert.equal(entries.length, expectedCount, 'total parsed file bytes must stay within the aggregate budget');
+    assert.equal(entries[0].id, ids.at(-1), 'newest entries must be preferred');
+    assert.equal(entries.at(-1).id, ids[50 - expectedCount], 'older entries beyond the byte budget must be omitted');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
