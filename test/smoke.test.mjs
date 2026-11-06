@@ -82,8 +82,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
     });
 
     assert.match(stdout, /2 discovered, 1 PID present/);
-    assert.match(stdout, /pid-present\\s+powershell/);
-    assert.match(stdout, /exited\\s+powershell/);
+    assert.match(stdout, /pid-present\s+powershell/);
+    assert.match(stdout, /exited\s+powershell/);
     assert.match(stdout, /PID presence is best-effort/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
