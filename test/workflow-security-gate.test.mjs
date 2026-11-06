@@ -5,8 +5,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8');
-const security = readFileSync(resolve(ROOT, '.github/workflows/security.yml'), 'utf8');
+const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8').replace(/\r\n/g, '\n');
+const security = readFileSync(resolve(ROOT, '.github/workflows/security.yml'), 'utf8').replace(/\r\n/g, '\n');
 
 test('security workflow is reusable by the CI release gate', () => {
   assert.match(security, /^  workflow_call:\s*$/m);
