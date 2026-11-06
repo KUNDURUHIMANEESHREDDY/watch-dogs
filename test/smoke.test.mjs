@@ -65,8 +65,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
   try {
     const liveFile = join(dir, 'ps-active.log');
     const exitedFile = join(dir, 'ps-exited.log');
-    writeFileSync(liveFile, 'active transcript\\n', 'utf8');
-    writeFileSync(exitedFile, 'completed transcript\\n', 'utf8');
+    writeFileSync(liveFile, 'active transcript\n', 'utf8');
+    writeFileSync(exitedFile, 'completed transcript\n', 'utf8');
     writeFileSync(liveFile + '.json', JSON.stringify({
       shell: 'powershell', pid: process.pid, cwd: ROOT, ide: 'VS Code / Cursor',
     }), 'utf8');
@@ -82,8 +82,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
     });
 
     assert.match(stdout, /2 discovered, 1 PID present/);
-    assert.match(stdout, /pid-present\\s+ powershell/);
-    assert.match(stdout, /exited\\s+ powershell/);
+    assert.match(stdout, /pid-present\\s+powershell/);
+    assert.match(stdout, /exited\\s+powershell/);
     assert.match(stdout, /PID presence is best-effort/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
