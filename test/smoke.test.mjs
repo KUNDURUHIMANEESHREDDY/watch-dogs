@@ -85,6 +85,18 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
     assert.match(stdout, /pid-present\s+powershell/);
     assert.match(stdout, /exited\s+powershell/);
     assert.match(stdout, /PID presence is best-effort/);
+
+    // Doctor and status must use the same transcript-sidecar source; otherwise
+    // the diagnostic command can contradict the session summary users just saw.
+    const doctorOutput = execFileSync(process.execPath, [join(ROOT, 'bin', 'wd.js'), 'doctor'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, WD_TRANSCRIPT_DIR: dir, NO_COLOR: '1' },
+    });
+    assert.match(doctorOutput, /2 discovered; 1 PID present/);
+    assert.match(doctorOutput, /pid-present\\s+powershell/);
+    assert.match(doctorOutput, /exited\\s+powershell/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
