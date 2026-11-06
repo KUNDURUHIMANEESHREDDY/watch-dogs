@@ -525,7 +525,7 @@ function cmdStatus() {
   const pidPresent = sessions.filter((s) => s.status === 'pid-present');
   out('  ' + col('b', 'sessions'.padEnd(15)) + ' ' + sessions.length + ' discovered, ' + pidPresent.length + ' PID present');
   for (const s of sessions.slice(-5)) {
-    out(col('d', '    ' + s.status.padEnd(11) + String(s.shell).padEnd(12) + String(s.ide ?? '').padEnd(18) + (s.cwd ?? '')));
+    out(col('d', '    ' + s.status.padEnd(11) + ' ' + String(s.shell).padEnd(12) + String(s.ide ?? '').padEnd(18) + (s.cwd ?? '')));
   }
   if (sessions.length) out(col('d', '    PID presence is best-effort; it does not prove process identity.'));
 
