@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -58,6 +58,36 @@ test('detectIde identifies an IDE terminal from env alone', async () => {
   assert.equal(detectIde({ WT_PROFILE_ID: 'abc' }), 'Windows Terminal');
   assert.equal(detectIde({ GOORU_IDE: 'x' }), 'GoLand');
   assert.equal(detectIde({}), 'unknown');
+});
+
+test('wd status discovers transcript sidecars and distinguishes PID presence from exited sessions', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd-session-status-'));
+  try {
+    const liveFile = join(dir, 'ps-active.log');
+    const exitedFile = join(dir, 'ps-exited.log');
+    writeFileSync(liveFile, 'active transcript\\n', 'utf8');
+    writeFileSync(exitedFile, 'completed transcript\\n', 'utf8');
+    writeFileSync(liveFile + '.json', JSON.stringify({
+      shell: 'powershell', pid: process.pid, cwd: ROOT, ide: 'VS Code / Cursor',
+    }), 'utf8');
+    writeFileSync(exitedFile + '.json', JSON.stringify({
+      shell: 'powershell', pid: 2147483647, cwd: ROOT, ide: 'Windows Terminal',
+    }), 'utf8');
+
+    const stdout = execFileSync(process.execPath, [join(ROOT, 'bin', 'wd.js'), 'status'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, WD_TRANSCRIPT_DIR: dir, NO_COLOR: '1' },
+    });
+
+    assert.match(stdout, /2 discovered, 1 PID present/);
+    assert.match(stdout, /pid-present\\s+ powershell/);
+    assert.match(stdout, /exited\\s+ powershell/);
+    assert.match(stdout, /PID presence is best-effort/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('config loads and defaults to a valid autonomy', async () => {
