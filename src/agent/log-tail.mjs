@@ -14,13 +14,13 @@ export function readBoundedLogTail(path, {
   maxLineChars = MAX_LOG_LINE_CHARS,
 } = {}) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_LOG_TAIL_BYTES) {
-    throw new RangeError(`maxBytes must be between 1 and ${MAX_LOG_TAIL_BYTES}`);
+    throw new RangeError('maxBytes must be between 1 and ' + MAX_LOG_TAIL_BYTES);
   }
   if (!Number.isSafeInteger(maxLines) || maxLines < 1 || maxLines > MAX_LOG_TAIL_LINES) {
-    throw new RangeError(`maxLines must be between 1 and ${MAX_LOG_TAIL_LINES}`);
+    throw new RangeError('maxLines must be between 1 and ' + MAX_LOG_TAIL_LINES);
   }
   if (!Number.isSafeInteger(maxLineChars) || maxLineChars < 1 || maxLineChars > MAX_LOG_LINE_CHARS) {
-    throw new RangeError(`maxLineChars must be between 1 and ${MAX_LOG_LINE_CHARS}`);
+    throw new RangeError('maxLineChars must be between 1 and ' + MAX_LOG_LINE_CHARS);
   }
 
   let fd;
@@ -28,29 +28,40 @@ export function readBoundedLogTail(path, {
     const linkStats = lstatSync(path);
     if (!linkStats.isFile() || linkStats.isSymbolicLink()) return [];
 
-    // O_NOFOLLOW closes the lstat/open symlink race on POSIX. On Windows,
-    // re-check the pathname against the opened file descriptor below.
+    // O_NOFOLLOW blocks symlink substitution on POSIX. O_NONBLOCK prevents a
+    // regular log path swapped for a FIFO between lstat and open from hanging
+    // the caller. It has no effect on ordinary regular-file reads. Descriptor
+    // identity checks below also reject replacement with another regular file.
     const flags = process.platform === 'win32'
       ? 'r'
-      : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+      : constants.O_RDONLY
+        | (constants.O_NOFOLLOW ?? 0)
+        | (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, flags);
     const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.size === 0) return [];
+    if (
+      !stats.isFile()
+      || stats.dev !== linkStats.dev
+      || stats.ino !== linkStats.ino
+    ) return [];
 
-    if (!constants.O_NOFOLLOW) {
-      let currentStats;
-      try {
-        currentStats = lstatSync(path);
-      } catch {
-        return [];
-      }
-      if (
-        currentStats.isSymbolicLink()
-        || !currentStats.isFile()
-        || currentStats.dev !== stats.dev
-        || currentStats.ino !== stats.ino
-      ) return [];
+    // Confirm that the pathname still identifies the opened descriptor. This
+    // closes the regular-file swap window after open without changing which
+    // already-open file descriptor is used for the bounded read.
+    let currentStats;
+    try {
+      currentStats = lstatSync(path);
+    } catch {
+      return [];
     }
+    if (
+      currentStats.isSymbolicLink()
+      || !currentStats.isFile()
+      || currentStats.dev !== stats.dev
+      || currentStats.ino !== stats.ino
+    ) return [];
+
+    if (stats.size === 0) return [];
 
     const start = Math.max(0, stats.size - maxBytes);
     const length = Math.min(stats.size, maxBytes);
@@ -73,7 +84,7 @@ export function readBoundedLogTail(path, {
         // The configured cap applies to the returned line, including its marker.
         // For very small caps there is no room for the marker, so return a safe prefix.
         return maxLineChars > marker.length
-          ? `${line.slice(0, maxLineChars - marker.length)}${marker}`
+          ? line.slice(0, maxLineChars - marker.length) + marker
           : line.slice(0, maxLineChars);
       });
   } catch (error) {
