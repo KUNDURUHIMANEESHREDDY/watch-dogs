@@ -95,8 +95,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
       env: { ...process.env, WD_TRANSCRIPT_DIR: dir, NO_COLOR: '1' },
     });
     assert.match(doctorOutput, /2 discovered; 1 PID present/);
-    assert.match(doctorOutput, /pid-present\\s+powershell/);
-    assert.match(doctorOutput, /exited\\s+powershell/);
+    assert.match(doctorOutput, /pid-present\s+powershell/);
+    assert.match(doctorOutput, /exited\s+powershell/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
