@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../core/config.mjs';
 import { readHeartbeat } from '../core/heartbeat.mjs';
 import { parseCookies } from './cookies.mjs';
+import { readJsonBody } from './request-body.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../../web/', import.meta.url)));
 const HOST = '127.0.0.1';
@@ -27,21 +28,7 @@ const safeEqual = (a, b) => {
   return aa.length === bb.length && timingSafeEqual(aa, bb);
 };
 function readBody(req) {
-  return new Promise((resolveBody, reject) => {
-    let raw = '';
-    req.on('data', chunk => {
-      raw += chunk;
-      if (Buffer.byteLength(raw) > MAX_BODY) {
-        reject(Object.assign(new Error('request body too large'), { status: 413 }));
-        req.destroy();
-      }
-    });
-    req.on('end', () => {
-      try { resolveBody(raw ? JSON.parse(raw) : {}); }
-      catch { reject(Object.assign(new Error('invalid JSON'), { status: 400 })); }
-    });
-    req.on('error', reject);
-  });
+  return readJsonBody(req, MAX_BODY);
 }
 function isOriginAllowed(req) {
   const origin = req.headers.origin;
@@ -198,7 +185,16 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === 'POST' && url.pathname === '/api/session') {
     let body;
-    try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: e.message }); }
+    try { body = await readBody(req); } catch (e) {
+      const status = e.status || 400;
+      if (status === 413) {
+        // Send the bounded error response before closing a client that may still
+        // be streaming an oversized body.
+        res.once('finish', () => req.destroy());
+        return json(res, 413, { error: e.message }, { Connection: 'close' });
+      }
+      return json(res, status, { error: e.message });
+    }
     if (!safeEqual(body.pairingCode ?? '', pairingCode)) return json(res, 401, { error: 'invalid_pairing_code' });
     const id = randomBytes(32).toString('base64url');
     sessions.set(id, Date.now() + SESSION_TTL);
