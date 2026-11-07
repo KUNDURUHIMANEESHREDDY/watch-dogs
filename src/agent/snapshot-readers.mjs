@@ -94,6 +94,13 @@ export function readBoundedDirectoryNames(path, limit = MAX_DIRECTORY_NAMES) {
     const before = lstatSync(path);
     if (before.isSymbolicLink() || !before.isDirectory()) return [];
     directory = opendirSync(path, { bufferSize: Math.min(limit, 32) });
+    const openedPath = lstatSync(path);
+    if (
+      openedPath.isSymbolicLink()
+      || !openedPath.isDirectory()
+      || openedPath.dev !== before.dev
+      || openedPath.ino !== before.ino
+    ) return [];
     const names = [];
     while (names.length < limit) {
       const entry = directory.readSync();
