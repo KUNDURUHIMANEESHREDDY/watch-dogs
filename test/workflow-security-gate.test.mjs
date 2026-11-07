@@ -56,8 +56,24 @@ test('fault injection: a skipped dependency also blocks release', () => {
   assert.match(result.stderr, /security=skipped/);
 });
 
-test('missing or malformed dependency results fail closed', () => {
+test('missing dependency results fail closed', () => {
   const missing = spawnSync(process.execPath, [gate, 'security=success'], { encoding: 'utf8' });
   assert.equal(missing.status, 2);
-  assert.match(missing.stderr, /expected name=result/i);
+  assert.match(missing.stderr, /missing: core-tests/);
+});
+
+test('malformed dependency results fail closed', () => {
+  const malformed = spawnSync(process.execPath, [gate, 'security='], { encoding: 'utf8' });
+  assert.equal(malformed.status, 2);
+  assert.match(malformed.stderr, /expected name=result/i);
+});
+
+test('duplicate and unexpected dependency names fail closed', () => {
+  const duplicate = spawnSync(process.execPath, [gate, ...successfulResults, 'security=success'], { encoding: 'utf8' });
+  assert.equal(duplicate.status, 2);
+  assert.match(duplicate.stderr, /duplicate result for security/i);
+
+  const unexpected = spawnSync(process.execPath, [gate, ...successfulResults, 'other=success'], { encoding: 'utf8' });
+  assert.equal(unexpected.status, 2);
+  assert.match(unexpected.stderr, /unexpected: other/i);
 });
