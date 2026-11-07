@@ -33,11 +33,15 @@ export function readBoundedJsonlLines(
   const linkStat = lstatSync(path);
   if (!linkStat.isFile() || linkStat.isSymbolicLink()) return [];
 
-  // O_NOFOLLOW closes the lstat/open symlink race on platforms that support it.
-  // The descriptor identity check below also rejects regular-file path swaps.
+  // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms.
+  // O_NONBLOCK also closes the lstat/open FIFO race: opening a replacement
+  // FIFO must return immediately so fstat can reject the non-regular file.
+  // The descriptor identity check below rejects regular-file path swaps.
   const flags = process.platform === 'win32'
     ? 'r'
-    : constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+    : constants.O_RDONLY
+      | (constants.O_NOFOLLOW ?? 0)
+      | (constants.O_NONBLOCK ?? 0);
   const fd = openSync(path, flags);
 
   try {
