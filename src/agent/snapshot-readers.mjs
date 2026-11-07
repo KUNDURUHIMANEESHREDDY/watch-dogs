@@ -23,6 +23,7 @@ const DEFAULT_JOURNAL_FILES = 200;
 const DEFAULT_JOURNAL_ENTRY_BYTES = 256 * 1024;
 const DEFAULT_JOURNAL_TOTAL_BYTES = 4 * 1024 * 1024;
 
+/** Validate a positive safe-integer limit against its configured ceiling. */
 function positiveLimit(value, maximum, name) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
     throw new RangeError(name + ' must be between 1 and ' + maximum);
@@ -39,25 +40,27 @@ export function readBoundedRegularFile(path, maxBytes, { tail = false } = {}) {
   positiveLimit(maxBytes, MAX_FILE_BYTES, 'maxBytes');
   let fd;
   try {
-    const before = lstatSync(path);
+    // BigIntStats preserves the full device/inode identity on filesystems
+    // whose identifiers exceed JavaScript's safe-integer range.
+    const before = lstatSync(path, { bigint: true });
     if (before.isSymbolicLink() || !before.isFile()) return null;
-    if (!tail && before.size > maxBytes) return null;
+    if (!tail && before.size > BigInt(maxBytes)) return null;
 
     const flags = constants.O_RDONLY
       | (constants.O_NOFOLLOW ?? 0)
       | (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, flags);
-    const opened = fstatSync(fd);
+    const opened = fstatSync(fd, { bigint: true });
     if (
       !opened.isFile()
       || opened.dev !== before.dev
       || opened.ino !== before.ino
-      || (!tail && opened.size > maxBytes)
+      || (!tail && opened.size > BigInt(maxBytes))
     ) return null;
 
     // Verify that the path still names the descriptor we opened. Reads below
     // use the descriptor, never the path, so a later rename cannot redirect it.
-    const current = lstatSync(path);
+    const current = lstatSync(path, { bigint: true });
     if (
       current.isSymbolicLink()
       || !current.isFile()
@@ -65,8 +68,13 @@ export function readBoundedRegularFile(path, maxBytes, { tail = false } = {}) {
       || current.ino !== opened.ino
     ) return null;
 
-    const start = tail ? Math.max(0, opened.size - maxBytes) : 0;
-    const length = Math.min(maxBytes, Math.max(0, opened.size - start));
+    // readSync uses a Number position. Refuse sizes outside the safe integer
+    // range rather than rounding an offset and potentially reading the wrong
+    // region of a very large file.
+    if (opened.size > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    const size = Number(opened.size);
+    const start = tail ? Math.max(0, size - maxBytes) : 0;
+    const length = Math.min(maxBytes, Math.max(0, size - start));
     const buffer = Buffer.alloc(length);
     let offset = 0;
     while (offset < length) {
@@ -95,10 +103,11 @@ export function readBoundedDirectoryNames(path, limit = MAX_DIRECTORY_NAMES) {
   positiveLimit(limit, MAX_DIRECTORY_NAMES, 'limit');
   let directory;
   try {
-    const before = lstatSync(path);
+    // BigIntStats avoids lossy inode/device comparisons on large filesystems.
+    const before = lstatSync(path, { bigint: true });
     if (before.isSymbolicLink() || !before.isDirectory()) return [];
     directory = opendirSync(path, { bufferSize: Math.min(limit, 32) });
-    const openedPath = lstatSync(path);
+    const openedPath = lstatSync(path, { bigint: true });
     if (
       openedPath.isSymbolicLink()
       || !openedPath.isDirectory()
@@ -121,6 +130,7 @@ export function readBoundedDirectoryNames(path, limit = MAX_DIRECTORY_NAMES) {
   }
 }
 
+/** Parse a bounded JSONL tail, omitting malformed or overlong records. */
 function parseTailJsonLines(content, maxLines, maxLineBytes) {
   const records = [];
   let end = content.length;
