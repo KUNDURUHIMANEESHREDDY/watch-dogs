@@ -52,13 +52,16 @@ function readBoundedRegularFile(path, maxBytes) {
   if (!initial.isFile() || initial.isSymbolicLink() || initial.size > maxBytes) return null;
 
   // O_NOFOLLOW blocks symlink substitution on supported POSIX platforms.
+  // O_NONBLOCK also closes the lstat/open FIFO race: a replacement FIFO must
+  // open immediately so fstat can reject the non-regular descriptor.
   // Verify device/inode identity on every platform as well: O_NOFOLLOW does not
   // prevent the pathname from being replaced with a different regular file
   // between lstat and open. Once identity is checked, reads use the open fd.
-  const supportsNoFollowOpen = process.platform !== 'win32' && Boolean(constants.O_NOFOLLOW);
-  const flags = supportsNoFollowOpen
-    ? constants.O_RDONLY | constants.O_NOFOLLOW
-    : 'r';
+  const flags = process.platform === 'win32'
+    ? 'r'
+    : constants.O_RDONLY
+      | (constants.O_NOFOLLOW ?? 0)
+      | (constants.O_NONBLOCK ?? 0);
   const fd = openSync(path, flags);
   try {
     const opened = fstatSync(fd);

@@ -6,13 +6,14 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { TextDecoder } from 'node:util';
 
 const DEFAULT_MAX_EVENTS = 128;
 const DEFAULT_MAX_BYTES = 3 * 1024 * 1024;
@@ -66,7 +67,10 @@ export function loadEventHistory(path, options = {}) {
     if (linkStat.isSymbolicLink() || !linkStat.isFile() || linkStat.size > maxBytes) {
       return { events: [], healthy: false };
     }
-    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
+    // A regular file can be replaced by a FIFO after lstat and before open.
+    // O_NONBLOCK prevents gateway startup from hanging on that race; fstat
+    // below still rejects the opened non-regular descriptor.
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
     fd = openSync(path, flags);
     const stat = fstatSync(fd);
     // O_NOFOLLOW is not available on every supported platform. Compare the
@@ -75,10 +79,29 @@ export function loadEventHistory(path, options = {}) {
         (linkStat.dev !== stat.dev || linkStat.ino !== stat.ino)) {
       return { events: [], healthy: false };
     }
-    const content = readFileSync(fd, 'utf8');
-    if (Buffer.byteLength(content, 'utf8') > maxBytes) return { events: [], healthy: false };
-    if (!content) return { events: [], healthy: true };
+    // The file can grow after fstat. Never use readFileSync here: it would
+    // allocate the entire post-stat size before the byte limit is checked.
+    // Read at most maxBytes + 1 so concurrent appends are detected without
+    // allowing the snapshot allocation to grow with an untrusted file.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    if (bytesRead > maxBytes) return { events: [], healthy: false };
+    if (bytesRead === 0) return { events: [], healthy: true };
 
+    let content;
+    try {
+      // Buffer.toString('utf8') silently replaces malformed byte sequences. A
+      // replacement character can leave the JSON valid while corrupting an SSE
+      // payload, so persisted history must be decoded strictly and fail closed.
+      content = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    } catch {
+      return { events: [], healthy: false };
+    }
     const lines = content.split('\n');
     if (lines.at(-1) === '') lines.pop();
     if (lines.length > maxEvents) return { events: [], healthy: false };

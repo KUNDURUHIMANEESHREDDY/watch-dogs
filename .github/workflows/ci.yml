@@ -53,8 +53,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Run POSIX directory, log-tail and event-history regressions
-        run: node --test test/directory-list.test.mjs test/log-tail.test.mjs test/event-history.test.mjs
+      - name: Run POSIX directory, log-tail, findings, journal and event-history regressions
+        run: node --test test/directory-list.test.mjs test/log-tail.test.mjs test/findings-reader.test.mjs test/journal-reader.test.mjs test/event-history.test.mjs
 
   frontend-e2e:
     name: Frontend session recovery E2E
