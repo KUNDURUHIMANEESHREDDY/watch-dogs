@@ -45,7 +45,7 @@ test('UI does not claim missing finding or repair integrations are operational',
   assert.match(gatewaySource, /readBoundedDirectoryNames\(cfg\.paths\.data, 100\)/);
   assert.match(gatewaySource, /findingsSnapshot: true/);
   assert.match(gatewaySource, /journalSnapshot: true/);
-  assert.match(gatewaySource, /function readJournal/);
+  assert.match(gatewaySource, /readJournal\(cfg\.paths\.data, cfg\.projectRoot\)/);
   assert.match(gatewaySource, /const verifications = findings\.filter/);
   assert.match(gatewaySource, /repairExecution: false/);
 });
