@@ -220,3 +220,84 @@ test('journal snapshot skips oversized and symlink entries without following the
     assert.equal(entries[0].target, join('src', 'file.js'));
   });
 });
+
+
+test('file identity comparisons preserve bigint inode precision', (t) => {
+  const path = '/virtual/watch-dogs/findings.jsonl';
+  const before = {
+    dev: 9007199254740992n,
+    ino: 11n,
+    size: 12n,
+    isSymbolicLink: () => false,
+    isFile: () => true,
+  };
+  const opened = {
+    ...before,
+    dev: 9007199254740993n,
+  };
+  let lstatCalls = 0;
+  let fstatUsedBigInt = false;
+  const lstatMock = t.mock.method(fs, 'lstatSync', (_candidate, options) => {
+    assert.equal(options?.bigint, true);
+    lstatCalls += 1;
+    return before;
+  });
+  const openMock = t.mock.method(fs, 'openSync', () => 123);
+  const fstatMock = t.mock.method(fs, 'fstatSync', (_fd, options) => {
+    fstatUsedBigInt = options?.bigint === true;
+    return opened;
+  });
+  const closeMock = t.mock.method(fs, 'closeSync', () => {});
+  syncBuiltinESMExports();
+  try {
+    assert.equal(readBoundedRegularFile(path, 1024), null);
+    assert.equal(lstatCalls, 1, 'the mismatched descriptor must be rejected before the second path check');
+    assert.equal(fstatUsedBigInt, true);
+  } finally {
+    lstatMock.mock.restore();
+    openMock.mock.restore();
+    fstatMock.mock.restore();
+    closeMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
+test('directory identity comparisons preserve bigint inode precision', (t) => {
+  const path = '/virtual/watch-dogs/journal';
+  const before = {
+    dev: 9007199254740992n,
+    ino: 21n,
+    size: 0n,
+    isSymbolicLink: () => false,
+    isFile: () => false,
+    isDirectory: () => true,
+  };
+  const replaced = {
+    ...before,
+    dev: 9007199254740993n,
+  };
+  let lstatCalls = 0;
+  let directoryReads = 0;
+  const lstatMock = t.mock.method(fs, 'lstatSync', (_candidate, options) => {
+    assert.equal(options?.bigint, true);
+    lstatCalls += 1;
+    return lstatCalls === 1 ? before : replaced;
+  });
+  const openDirMock = t.mock.method(fs, 'opendirSync', () => ({
+    readSync() {
+      directoryReads += 1;
+      return null;
+    },
+    closeSync() {},
+  }));
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual(readBoundedDirectoryNames(path, 10), []);
+    assert.equal(lstatCalls, 2);
+    assert.equal(directoryReads, 0, 'a replaced directory must not be enumerated');
+  } finally {
+    lstatMock.mock.restore();
+    openDirMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
