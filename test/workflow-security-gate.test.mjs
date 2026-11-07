@@ -46,7 +46,7 @@ test('the single required aggregate maps every dependency to its matching result
   assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
 
   const envMappings = required.split('\n').flatMap(line => {
-    const match = line.match(/^\s+([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z-]+)\.result\s*\}\}$/);
+    const match = line.match(/^\s+([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z0-9-]+)\.result\s*\}\}$/);
     return match ? [[match[2], match[1]]] : [];
   });
   assert.deepEqual(envMappings, expected, 'each environment variable must map to its matching dependency');
@@ -54,7 +54,7 @@ test('the single required aggregate maps every dependency to its matching result
   const runStart = required.indexOf('        run: |');
   assert.notEqual(runStart, -1, 'required aggregate must invoke the executable gate');
   const gateArguments = required.slice(runStart).split('\n').flatMap(line => {
-    const match = line.match(/^\s+"([a-z-]+)=\$([A-Z0-9_]+)"\s*\\?$/);
+    const match = line.match(/^\s+"([a-z0-9-]+)=\$([A-Z0-9_]+)"\s*\\?$/);
     return match ? [[match[1], match[2]]] : [];
   });
   assert.deepEqual(gateArguments, expected, 'each gate argument must use the matching dependency result');
