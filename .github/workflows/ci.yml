@@ -142,6 +142,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Check out the release-gate helper
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js for the release gate
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Enforce all release checks
         env:
           CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
