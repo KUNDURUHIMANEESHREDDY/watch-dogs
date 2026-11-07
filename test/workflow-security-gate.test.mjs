@@ -51,13 +51,16 @@ test('the single required aggregate maps every dependency to its matching result
   });
   assert.deepEqual(envMappings, expected, 'each environment variable must map to its matching dependency');
 
-  const runStart = required.indexOf('        run: |');
-  assert.notEqual(runStart, -1, 'required aggregate must invoke the executable gate');
-  const gateArguments = required.slice(runStart).split('\n').flatMap(line => {
-    const match = line.match(/^\s+"([a-z0-9-]+)=\$([A-Z0-9_]+)"\s*\\?$/);
-    return match ? [[match[1], match[2]]] : [];
+  const gateArguments = expected.map(([name, variable], index) => {
+    const continuation = index < expected.length - 1 ? ' \\' : '';
+    return '            "' + name + '=$' + variable + '"' + continuation;
   });
-  assert.deepEqual(gateArguments, expected, 'each gate argument must use the matching dependency result');
+  const gateCommand = [
+    '        run: |',
+    '          node scripts/require-successful-jobs.mjs \\',
+    ...gateArguments,
+  ].join('\n');
+  assert.ok(required.includes(gateCommand), 'required aggregate must invoke the gate with the matching dependency results');
   assert.match(required, /uses: actions\/checkout@v7/);
   assert.match(required, /uses: actions\/setup-node@v7/);
   assert.match(required, /node-version: 22/);
