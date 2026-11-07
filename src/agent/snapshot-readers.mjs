@@ -7,6 +7,7 @@ import {
   opendirSync,
   readSync,
 } from 'node:fs';
+import { join } from 'node:path';
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_FINDINGS_TOTAL_BYTES = 4 * 1024 * 1024;
@@ -152,7 +153,7 @@ export function readFindings(dataDir, limit = 200, options = {}) {
     'maxLineBytes',
   );
 
-  const base = dataDir + (dataDir.endsWith('/') ? '' : '/') + 'findings.jsonl';
+  const base = join(dataDir, 'findings.jsonl');
   const records = [];
   let remaining = maxTotalBytes;
   for (const path of [base + '.1', base]) {
@@ -216,7 +217,7 @@ export function readBoundedLogLines(dataDir, options = {}) {
     DEFAULT_LOG_LINE_CHARS,
     'maxLineChars',
   );
-  const path = dataDir + (dataDir.endsWith('/') ? '' : '/') + 'daemon.log';
+  const path = join(dataDir, 'daemon.log');
   const file = readBoundedRegularFile(path, maxBytes, { tail: true });
   if (!file) return [];
   const lines = [];
