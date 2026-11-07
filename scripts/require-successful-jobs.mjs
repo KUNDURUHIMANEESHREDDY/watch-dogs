@@ -1,3 +1,11 @@
+const REQUIRED_NAMES = [
+  'core-tests',
+  'frontend-e2e',
+  'frontend-build',
+  'gateway-e2e',
+  'security',
+];
+
 const entries = process.argv.slice(2);
 
 if (entries.length === 0) {
@@ -21,10 +29,23 @@ for (const entry of entries) {
   results.set(name, result);
 }
 
-const failed = [...results.entries()].filter(([, result]) => result !== 'success');
+const missing = REQUIRED_NAMES.filter((name) => !results.has(name));
+const unexpected = [...results.keys()].filter((name) => !REQUIRED_NAMES.includes(name));
+if (missing.length > 0 || unexpected.length > 0) {
+  const details = [
+    ...(missing.length ? [`missing: ${missing.join(', ')}`] : []),
+    ...(unexpected.length ? [`unexpected: ${unexpected.join(', ')}`] : []),
+  ];
+  console.error(`Release gate blocked: ${details.join('; ')}.`);
+  process.exit(2);
+}
+
+const failed = REQUIRED_NAMES
+  .map((name) => [name, results.get(name)])
+  .filter(([, result]) => result !== 'success');
 if (failed.length > 0) {
   console.error(`Release gate blocked: ${failed.map(([name, result]) => `${name}=${result}`).join(', ')}.`);
   process.exit(1);
 }
 
-console.log(`Release gate passed: all ${results.size} required jobs succeeded.`);
+console.log(`Release gate passed: all ${REQUIRED_NAMES.length} required jobs succeeded.`);
