@@ -144,7 +144,7 @@ test('dashboard log snapshot is bounded by bytes, lines and line characters', ()
     });
     assert.ok(result.length <= 2);
     assert.ok(result.every(item => item.line.length <= 5));
-    assert.ok(result.some(item => item.line.startsWith('fourth')));
+    assert.ok(result.some(item => item.line === 'fourt'));
   });
 });
 
