@@ -7,7 +7,7 @@ import {
   opendirSync,
   readSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const DEFAULT_FINDINGS_TOTAL_BYTES = 4 * 1024 * 1024;
@@ -17,7 +17,11 @@ const MAX_FINDING_LINES_PER_FILE = 2000;
 const DEFAULT_LOG_BYTES = 64 * 1024;
 const DEFAULT_LOG_LINES = 80;
 const DEFAULT_LOG_LINE_CHARS = 4096;
-const MAX_DIRECTORY_NAMES = 100;
+const MAX_DIRECTORY_NAMES = 1000;
+const DEFAULT_JOURNAL_SCAN_ENTRIES = 1000;
+const DEFAULT_JOURNAL_FILES = 200;
+const DEFAULT_JOURNAL_ENTRY_BYTES = 256 * 1024;
+const DEFAULT_JOURNAL_TOTAL_BYTES = 4 * 1024 * 1024;
 
 function positiveLimit(value, maximum, name) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
@@ -213,6 +217,83 @@ export function readFindings(dataDir, limit = 200, options = {}) {
       requiresHuman: Boolean(record.advisor?.requiresHuman),
       suppressed: record.suppressed || null,
     }));
+}
+
+/**
+ * Read a bounded journal snapshot. Journal names are timestamp-prefixed, so
+ * lexical order identifies the newest candidates within the bounded scan.
+ */
+export function readJournal(dataDir, projectRoot, limit = 100, options = {}) {
+  positiveLimit(limit, 100, 'limit');
+  const maxScanEntries = positiveLimit(
+    options.maxScanEntries ?? DEFAULT_JOURNAL_SCAN_ENTRIES,
+    DEFAULT_JOURNAL_SCAN_ENTRIES,
+    'maxScanEntries',
+  );
+  const maxFiles = positiveLimit(options.maxFiles ?? DEFAULT_JOURNAL_FILES, DEFAULT_JOURNAL_FILES, 'maxFiles');
+  const maxEntryBytes = positiveLimit(
+    options.maxEntryBytes ?? DEFAULT_JOURNAL_ENTRY_BYTES,
+    DEFAULT_JOURNAL_ENTRY_BYTES,
+    'maxEntryBytes',
+  );
+  const maxTotalBytes = positiveLimit(
+    options.maxTotalBytes ?? DEFAULT_JOURNAL_TOTAL_BYTES,
+    DEFAULT_JOURNAL_TOTAL_BYTES,
+    'maxTotalBytes',
+  );
+
+  const dir = join(dataDir, 'journal');
+  const files = readBoundedDirectoryNames(dir, maxScanEntries)
+    .filter(name => name.endsWith('.json'))
+    .sort()
+    .slice(-maxFiles)
+    .reverse();
+  const entries = [];
+  let remaining = maxTotalBytes;
+  for (const name of files) {
+    if (remaining <= 0) break;
+    const path = join(dir, name);
+    let before;
+    try {
+      before = lstatSync(path);
+    } catch {
+      continue;
+    }
+    if (before.isSymbolicLink() || !before.isFile() || before.size > maxEntryBytes) continue;
+    if (before.size > remaining) break;
+    const file = readBoundedRegularFile(path, Math.min(maxEntryBytes, remaining));
+    if (!file) continue;
+    remaining -= file.bytes;
+    let entry;
+    try {
+      entry = JSON.parse(file.content);
+    } catch {
+      continue;
+    }
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+
+    let target = null;
+    if (typeof entry.abs === 'string') {
+      const rel = relative(projectRoot, resolve(entry.abs));
+      target = rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)
+        ? '[outside project]'
+        : rel;
+    }
+    entries.push({
+      id: String(entry.id || name.replace(/\.json$/i, '')),
+      at: entry.at || null,
+      outcome: entry.outcome || 'unknown',
+      type: entry.type || 'unknown',
+      target,
+      source: entry.source || null,
+      txOutcome: entry.txOutcome || null,
+      reason: typeof entry.why === 'string' ? entry.why.slice(0, 240) : null,
+    });
+  }
+  return entries
+    .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
+    .slice(-limit)
+    .reverse();
 }
 
 /** Read a bounded tail of daemon.log, retaining only complete recent lines. */
