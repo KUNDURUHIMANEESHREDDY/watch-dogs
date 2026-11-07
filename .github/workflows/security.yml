@@ -66,8 +66,10 @@ jobs:
       - name: Scan Git history with Gitleaks
         uses: gitleaks/gitleaks-action@v3
         env:
-          # Use the ephemeral token; this job's permissions restrict it to contents:read.
+          # Gitleaks needs the ephemeral read-only token to enumerate PR commits.
+          # Keep PR comments disabled; this job grants no write permissions.
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
 
   sbom:
     name: Generate dependency SBOMs
