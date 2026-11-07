@@ -17,6 +17,12 @@ Do not commit credentials to suppress a secret scanner. For a suspected Gitleaks
 
 Security exceptions must be reviewed periodically and removed when no longer needed. Do not use an exception to waive an actual secret or a high/critical dependency vulnerability.
 
+## Release gate
+
+The CI workflow calls this Security workflow as a reusable prerequisite. Its single `required` aggregate fails unless core tests, frontend/browser checks, real-gateway E2E, and every Security job (dependency audits, Gitleaks, and SBOM generation) all succeed. Configure `required` as the protected-branch status check; do not rely on the standalone Security workflow's green result alone.
+
+The required job checks out the exact PR merge ref and sets up Node.js 22 before executing `scripts/require-successful-jobs.mjs`. The Node regression suite executes that gate with all-success inputs and fault-injected `failure`/`skipped` Security results, proving that a broken or skipped Security workflow blocks release. Malformed, missing, duplicate and unexpected dependency results also fail closed.
+
 ## Lockfiles
 
 Both the repository root and `frontend/` must commit their npm lockfiles. CI uses `npm ci` against each package manifest and lockfile. Generate or refresh lockfiles with the supported Node.js/npm version, review dependency changes, then run the test, build, and security workflows.
