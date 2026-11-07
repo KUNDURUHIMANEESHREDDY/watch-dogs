@@ -30,6 +30,9 @@ test('the single required aggregate delegates every dependency result to the exe
   const required = ci.slice(ci.indexOf('  required:\n'));
   assert.match(required, /needs: \[[^\]]*\bsecurity\b[^\]]*\]/);
   assert.match(required, /SECURITY_RESULT: \$\{\{ needs\.security\.result \}\}/);
+  assert.match(required, /uses: actions\/checkout@v7/);
+  assert.match(required, /uses: actions\/setup-node@v7/);
+  assert.match(required, /node-version: 22/);
   assert.match(required, /node scripts\/require-successful-jobs\.mjs/);
   for (const name of ['core-tests', 'frontend-e2e', 'frontend-build', 'gateway-e2e', 'security']) {
     assert.match(required, new RegExp(`"${name}=\\$[A-Z0-9_]+_RESULT"`));
