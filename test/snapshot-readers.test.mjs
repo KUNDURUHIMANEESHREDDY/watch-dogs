@@ -174,8 +174,8 @@ test('journal snapshot consumes its aggregate budget newest-first', () => {
       writeFileSync(join(journal, String(index).padStart(3, '0') + '.json'), JSON.stringify(entry));
     }
     const entries = readJournal(dir, join(dir, 'project'), 100, {
-      maxTotalBytes: 100,
-      maxEntryBytes: 100,
+      maxTotalBytes: 110,
+      maxEntryBytes: 110,
       maxFiles: 10,
       maxScanEntries: 10,
     });
@@ -214,7 +214,7 @@ test('journal snapshot skips oversized and symlink entries without following the
       }
       throw error;
     }
-    const entries = readJournal(dir, join(dir, 'project'));
+    const entries = readJournal(dir, join(dir, 'project'), 100, { maxEntryBytes: 128, maxTotalBytes: 512 });
     assert.equal(entries.length, 1);
     assert.equal(entries[0].id, 'valid');
     assert.equal(entries[0].target, join('src', 'file.js'));
