@@ -40,7 +40,9 @@ test('UI does not claim missing finding or repair integrations are operational',
   const gatewayPath = fileURLToPath(new URL('../src/agent/web-gateway.mjs', import.meta.url));
   const syntaxCheck = spawnSync(process.execPath, ['--check', gatewayPath], { encoding: 'utf8' });
   assert.equal(syntaxCheck.status, 0, syntaxCheck.stderr || 'gateway syntax check failed');
-  assert.match(gatewaySource, /findings\.jsonl/);
+  assert.match(gatewaySource, /readFindings\(cfg\.paths\.data\)/);
+  assert.match(gatewaySource, /readBoundedLogLines\(cfg\.paths\.data\)/);
+  assert.match(gatewaySource, /readBoundedDirectoryNames\(cfg\.paths\.data, 100\)/);
   assert.match(gatewaySource, /findingsSnapshot: true/);
   assert.match(gatewaySource, /journalSnapshot: true/);
   assert.match(gatewaySource, /function readJournal/);
