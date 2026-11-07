@@ -30,17 +30,40 @@ test('CI invokes the security workflow without inheriting unrelated repository s
   assert.match(security, /permissions:\n  contents: read/);
 });
 
-test('the single required aggregate delegates every dependency result to the executable gate', () => {
-  const required = ci.slice(ci.indexOf('  required:\n'));
-  assert.match(required, /needs: \[[^\]]*\bsecurity\b[^\]]*\]/);
-  assert.match(required, /SECURITY_RESULT: \$\{\{ needs\.security\.result \}\}/);
-  assert.match(required, /uses: actions\/checkout@v7/);
-  assert.match(required, /uses: actions\/setup-node@v7/);
-  assert.match(required, /node-version: 22/);
-  assert.match(required, /node scripts\/require-successful-jobs\.mjs/);
-  for (const name of ['core-tests', 'frontend-e2e', 'frontend-build', 'gateway-e2e', 'security']) {
-    assert.match(required, new RegExp(`"${name}=\\$[A-Z0-9_]+_RESULT"`));
+test('the single required aggregate maps every dependency to its matching result', () => {
+  const required = ci.slice(ci.indexOf('  required:\\n'));
+  const expected = [
+    ['core-tests', 'CORE_TESTS_RESULT'],
+    ['frontend-e2e', 'FRONTEND_E2E_RESULT'],
+    ['frontend-build', 'FRONTEND_BUILD_RESULT'],
+    ['gateway-e2e', 'GATEWAY_E2E_RESULT'],
+    ['security', 'SECURITY_RESULT'],
+  ];
+
+  const needsMatch = required.match(/^\\s+needs:\\s*\\[([^\\]]+)\\]/m);
+  assert.ok(needsMatch, 'required aggregate must declare its dependency list');
+  const dependencies = needsMatch[1].split(',').map(name => name.trim()).sort();
+  assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
+
+  for (const [name, variable] of expected) {
+    assert.match(
+      required,
+      new RegExp('^\\\\s+' + variable + ': \\\\$\\\\{\\\\{ needs\\\\.' + name + '\\\\.result \\\\}\\\\}$', 'm'),
+      name + ' must map to its own needs result',
+    );
   }
+
+  const runStart = required.indexOf('        run: |');
+  assert.notEqual(runStart, -1, 'required aggregate must invoke the executable gate');
+  const gateArguments = required.slice(runStart).split('\\n').flatMap(line => {
+    const match = line.match(/^\\s+"([a-z-]+)=\\$([A-Z0-9_]+)"\\s*\\\\?$/);
+    return match ? [[match[1], match[2]]] : [];
+  });
+  assert.deepEqual(gateArguments, expected, 'each gate argument must use the matching dependency result');
+  assert.match(required, /uses: actions\\/checkout@v7/);
+  assert.match(required, /uses: actions\\/setup-node@v7/);
+  assert.match(required, /node-version: 22/);
+  assert.match(required, /node scripts\\/require-successful-jobs\\.mjs/);
 });
 
 test('the release gate accepts only an all-success dependency set', () => {
