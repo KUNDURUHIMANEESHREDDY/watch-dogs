@@ -150,14 +150,9 @@ jobs:
           GATEWAY_E2E_RESULT: ${{ needs.gateway-e2e.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
         run: |
-          set -euo pipefail
-          echo "core-tests: $CORE_TESTS_RESULT"
-          echo "frontend-e2e: $FRONTEND_E2E_RESULT"
-          echo "frontend-build: $FRONTEND_BUILD_RESULT"
-          echo "gateway-e2e: $GATEWAY_E2E_RESULT"
-          echo "security: $SECURITY_RESULT"
-          test "$CORE_TESTS_RESULT" = "success"
-          test "$FRONTEND_E2E_RESULT" = "success"
-          test "$FRONTEND_BUILD_RESULT" = "success"
-          test "$GATEWAY_E2E_RESULT" = "success"
-          test "$SECURITY_RESULT" = "success"
+          node scripts/require-successful-jobs.mjs \
+            "core-tests=$CORE_TESTS_RESULT" \
+            "frontend-e2e=$FRONTEND_E2E_RESULT" \
+            "frontend-build=$FRONTEND_BUILD_RESULT" \
+            "gateway-e2e=$GATEWAY_E2E_RESULT" \
+            "security=$SECURITY_RESULT"

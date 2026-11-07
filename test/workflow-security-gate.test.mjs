@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,15 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ci = readFileSync(resolve(ROOT, '.github/workflows/ci.yml'), 'utf8').replace(/\r\n/g, '\n');
 const security = readFileSync(resolve(ROOT, '.github/workflows/security.yml'), 'utf8').replace(/\r\n/g, '\n');
+const gate = resolve(ROOT, 'scripts/require-successful-jobs.mjs');
+
+const successfulResults = [
+  'core-tests=success',
+  'frontend-e2e=success',
+  'frontend-build=success',
+  'gateway-e2e=success',
+  'security=success',
+];
 
 test('security workflow is reusable by the CI release gate', () => {
   assert.match(security, /^  workflow_call:\s*$/m);
@@ -16,10 +26,38 @@ test('CI invokes the security workflow and passes repository secrets explicitly'
   assert.match(ci, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml\n    secrets: inherit$/m);
 });
 
-test('the single required aggregate fails closed on security workflow failure', () => {
+test('the single required aggregate delegates every dependency result to the executable gate', () => {
   const required = ci.slice(ci.indexOf('  required:\n'));
   assert.match(required, /needs: \[[^\]]*\bsecurity\b[^\]]*\]/);
   assert.match(required, /SECURITY_RESULT: \$\{\{ needs\.security\.result \}\}/);
-  assert.match(required, /test "\$SECURITY_RESULT" = "success"/);
-  assert.match(required, /set -euo pipefail/);
+  assert.match(required, /node scripts\/require-successful-jobs\.mjs/);
+  for (const name of ['core-tests', 'frontend-e2e', 'frontend-build', 'gateway-e2e', 'security']) {
+    assert.match(required, new RegExp(`"${name}=\\$[A-Z_]+_RESULT"`));
+  }
+});
+
+test('the release gate accepts only an all-success dependency set', () => {
+  const result = spawnSync(process.execPath, [gate, ...successfulResults], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /all 5 required jobs succeeded/i);
+});
+
+test('fault injection: a failed Security dependency makes the release gate fail', () => {
+  const results = successfulResults.map(value => value.startsWith('security=') ? 'security=failure' : value);
+  const result = spawnSync(process.execPath, [gate, ...results], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /security=failure/);
+});
+
+test('fault injection: a skipped dependency also blocks release', () => {
+  const results = successfulResults.map(value => value.startsWith('security=') ? 'security=skipped' : value);
+  const result = spawnSync(process.execPath, [gate, ...results], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /security=skipped/);
+});
+
+test('missing or malformed dependency results fail closed', () => {
+  const missing = spawnSync(process.execPath, [gate, 'security=success'], { encoding: 'utf8' });
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /expected name=result/i);
 });

@@ -17,11 +17,11 @@ Do not commit credentials to suppress a secret scanner. For a suspected Gitleaks
 
 Security exceptions must be reviewed periodically and removed when no longer needed. Do not use an exception to waive an actual secret or a high/critical dependency vulnerability.
 
-
-
 ## Release gate
 
 The CI workflow calls this Security workflow as a reusable prerequisite. Its single `required` aggregate fails unless core tests, frontend/browser checks, real-gateway E2E, and every Security job (dependency audits, Gitleaks, and SBOM generation) all succeed. Configure `required` as the protected-branch status check; do not rely on the standalone Security workflow's green result alone.
+
+The aggregate delegates its dependency results to `scripts/require-successful-jobs.mjs`. The Node regression suite executes that gate with both all-success inputs and fault-injected `failure`/`skipped` Security results, proving that a broken or skipped Security workflow blocks release. Malformed or missing dependency results also fail closed.
 
 ## Lockfiles
 
