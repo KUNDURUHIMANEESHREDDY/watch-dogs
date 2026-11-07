@@ -46,7 +46,7 @@ test('the single required aggregate maps every dependency to its matching result
   assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
 
   const envMappings = required.split('\n').flatMap(line => {
-    const match = line.match(/^\s+([A-Z_]+_RESULT):\s*\$\{\{\s*needs\.([a-z-]+)\.result\s*\}\}$/);
+    const match = line.match(/^\s+([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z-]+)\.result\s*\}\}$/);
     return match ? [[match[2], match[1]]] : [];
   });
   assert.deepEqual(envMappings, expected, 'each environment variable must map to its matching dependency');
