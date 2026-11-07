@@ -22,8 +22,12 @@ test('security workflow is reusable by the CI release gate', () => {
   assert.match(security, /^  workflow_call:\s*$/m);
 });
 
-test('CI invokes the security workflow and passes repository secrets explicitly', () => {
-  assert.match(ci, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml\n    secrets: inherit$/m);
+test('CI invokes the security workflow without inheriting unrelated repository secrets', () => {
+  assert.match(ci, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml$/m);
+  assert.doesNotMatch(ci, /secrets:\s*inherit/);
+  assert.match(security, /^  workflow_call:\s*$/m);
+  assert.match(security, /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
+  assert.match(security, /permissions:\n  contents: read/);
 });
 
 test('the single required aggregate delegates every dependency result to the executable gate', () => {
