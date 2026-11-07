@@ -131,8 +131,6 @@ jobs:
   security:
     name: Security
     uses: ./.github/workflows/security.yml
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   required:
     name: required
