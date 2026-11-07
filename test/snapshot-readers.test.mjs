@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import {
+  mkdirSync,
   mkdtempSync,
   renameSync,
   rmSync,
@@ -16,6 +17,7 @@ import {
   readBoundedLogLines,
   readBoundedRegularFile,
   readFindings,
+  readJournal,
 } from '../src/agent/snapshot-readers.mjs';
 
 function withTempDir(run) {
@@ -154,5 +156,67 @@ test('directory snapshot enumerates no more than the requested names', () => {
     }
     const names = readBoundedDirectoryNames(dir, 3);
     assert.equal(names.length, 3);
+  });
+});
+
+test('journal snapshot consumes its aggregate budget newest-first', () => {
+  withTempDir((dir) => {
+    const journal = join(dir, 'journal');
+    mkdirSync(journal);
+    for (let index = 1; index <= 3; index += 1) {
+      const entry = {
+        id: String(index),
+        at: '2026-11-07T10:00:0' + index + '.000Z',
+        outcome: 'ok',
+        type: 'repair',
+        abs: '/outside/project/file-' + index,
+      };
+      writeFileSync(join(journal, String(index).padStart(3, '0') + '.json'), JSON.stringify(entry));
+    }
+    const entries = readJournal(dir, join(dir, 'project'), 100, {
+      maxTotalBytes: 100,
+      maxEntryBytes: 100,
+      maxFiles: 10,
+      maxScanEntries: 10,
+    });
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].id, '3');
+    assert.equal(entries[0].target, '[outside project]');
+  });
+});
+
+test('journal snapshot skips oversized and symlink entries without following them', (t) => {
+  withTempDir((dir) => {
+    const journal = join(dir, 'journal');
+    mkdirSync(journal);
+    const valid = {
+      id: 'valid',
+      at: '2026-11-07T10:00:00.000Z',
+      outcome: 'ok',
+      type: 'repair',
+      abs: join(dir, 'project', 'src', 'file.js'),
+    };
+    writeFileSync(join(journal, '001-valid.json'), JSON.stringify(valid));
+    writeFileSync(join(journal, '002-oversized.json'), JSON.stringify({
+      id: 'oversized',
+      at: '2026-11-07T10:00:01.000Z',
+      outcome: 'ok',
+      type: 'repair',
+      why: 'x'.repeat(300),
+    }));
+    writeFileSync(join(dir, 'outside.json'), JSON.stringify({ id: 'outside' }));
+    try {
+      symlinkSync(join(dir, 'outside.json'), join(journal, '003-linked.json'));
+    } catch (error) {
+      if (process.platform === 'win32' && ['EPERM', 'EACCES', 'ENOSYS', 'UNKNOWN'].includes(error?.code)) {
+        t.skip('symlink fixture unavailable on this Windows runner: ' + error.code);
+        return;
+      }
+      throw error;
+    }
+    const entries = readJournal(dir, join(dir, 'project'));
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].id, 'valid');
+    assert.equal(entries[0].target, join('src', 'file.js'));
   });
 });
