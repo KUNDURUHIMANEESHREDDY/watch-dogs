@@ -2,9 +2,6 @@ name: Security
 
 on:
   workflow_call:
-    secrets:
-      GITHUB_TOKEN:
-        required: true
   push:
     branches: [main]
   pull_request:
@@ -70,7 +67,7 @@ jobs:
       - name: Scan Git history with Gitleaks
         uses: gitleaks/gitleaks-action@v3
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   sbom:
     name: Generate dependency SBOMs
