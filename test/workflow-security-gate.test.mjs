@@ -31,8 +31,12 @@ test('security workflow is reusable by the CI release gate', () => {
 });
 
 test('CI invokes the security workflow without inheriting unrelated repository secrets', () => {
-  const securityJob = workflowJob(ci, 'security');
-  assert.match(securityJob, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml$/);
+  const securityJob = workflowJob(ci, 'security').trimEnd();
+  assert.equal(securityJob, [
+    '  security:',
+    '    name: Security',
+    '    uses: ./.github/workflows/security.yml',
+  ].join('\n'));
   assert.doesNotMatch(securityJob, /^    secrets:\s*inherit\s*$/m);
   assert.match(security, /^  workflow_call:\s*$/m);
   assert.match(security, /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
@@ -55,7 +59,7 @@ test('the single required aggregate maps every dependency to its matching result
   assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
 
   const envStart = required.indexOf('\n        env:\n');
-  const runStart = required.indexOf('\n        run:\n');
+  const runStart = required.indexOf('\n        run: |\n');
   assert.ok(envStart >= 0 && runStart > envStart, 'required aggregate must define an env block before its gate command');
   const envBlock = required.slice(envStart, runStart);
   const envMappings = [...envBlock.matchAll(/^          ([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z0-9-]+)\.result\s*\}\}$/gm)]
