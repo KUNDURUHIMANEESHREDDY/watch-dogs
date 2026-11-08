@@ -522,7 +522,7 @@ function cmdStatus() {
     out('  ' + col('b', 'langfuse'.padEnd(15)) + ' ' + col('d', 'off (set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable)'));
   }
 
-  const sessions = discoverTranscriptSessions();
+  const sessions = prioritizePidPresentSessions(discoverTranscriptSessions());
   const pidPresent = sessions.filter((s) => s.status === 'pid-present');
   out('  ' + col('b', 'sessions'.padEnd(15)) + ' ' + sessions.length + ' discovered, ' + pidPresent.length + ' PID present');
   for (const s of sessions.slice(0, 5)) {
