@@ -74,7 +74,8 @@ jobs:
         run: go install github.com/gitleaks/gitleaks/v8@v8.24.3
 
       - name: Scan all checked-out Git history with Gitleaks
-        run: "$(go env GOPATH)/bin/gitleaks" detect --source . --log-opts="--all" --redact --no-banner --exit-code 1
+        run: |
+          "$(go env GOPATH)/bin/gitleaks" detect --source . --log-opts="--all" --redact --no-banner --exit-code 1
 
   sbom:
     name: Generate dependency SBOMs
