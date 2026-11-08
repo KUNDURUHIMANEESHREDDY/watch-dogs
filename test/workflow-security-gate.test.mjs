@@ -69,11 +69,10 @@ test('CI invokes the security workflow without inheriting unrelated repository s
   const secretScan = workflowJob(security, 'secret-scan');
   assert.match(secretScan, /fetch-depth: 0/);
   assert.match(secretScan, /persist-credentials: false/);
-  assert.match(secretScan, /actions\/setup-go@v6/);
-  assert.match(secretScan, /go-version: \"1.24.0\"/);
-  assert.match(secretScan, /zricethezav\/gitleaks\/v8@v8.24.3/);
-  assert.match(secretScan, /detect --source \. --log-opts=\"--all\" --redact --no-banner --exit-code 1/);
-  assert.doesNotMatch(secretScan, /GITHUB_TOKEN|gitleaks-action/);
+  assert.match(secretScan, /ghcr\.io\/gitleaks\/gitleaks:v8\.30\.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb/);
+  assert.match(secretScan, /docker run --rm --network none --read-only/);
+  assert.match(secretScan, /detect --source \/repo --log-opts=\"--all\" --redact --no-banner --exit-code 1/);
+  assert.doesNotMatch(secretScan, /GITHUB_TOKEN|gitleaks-action|setup-go/);
   assert.match(security, /^  codeql:\s*$/m);
   assert.match(security, /^  security-required:\s*$/m);
   assert.match(security, /permissions:\n  contents: read/);
