@@ -12,7 +12,7 @@ import {
   openSync, readSync, closeSync, statSync, existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { LineSplitter } from './stream.mjs';
 import { log } from '../core/log.mjs';
@@ -64,6 +64,22 @@ export class TranscriptTailer {
     this.#meta.set(file, { ...meta, file, sessionId: meta.sessionId ?? randomUUID() });
     this.#open(file, offset);
     log.debug(`tailing ${file} from ${offset} (size ${size}, live=${isLive}, recent=${isRecent})`);
+  }
+
+  /**
+   * Refresh metadata for a transcript that was already opened before its
+   * sidecar became complete. Line callbacks read this map at delivery time.
+   */
+  refresh(file, meta = {}) {
+    const current = this.#meta.get(file);
+    if (!current) return false;
+    this.#meta.set(file, {
+      ...current,
+      ...meta,
+      file,
+      sessionId: meta.sessionId ?? current.sessionId,
+    });
+    return true;
   }
 
   #open(file, offset) {
@@ -243,18 +259,23 @@ export function transcriptDir() {
  */
 export class TranscriptDiscovery {
   #dir;
-  #known = new Set();
+  #known = new Map();
+  #pending = new Set();
   #seenDirs = new Set();
+  #sizes = new Map();
 
   constructor(dir) {
     this.#dir = dir;
   }
 
-  /** @returns {Array<{file:string, sessionId:string, shell:string, cwd:string, ide:string, pid:number}>} */
+  /** @returns {Array<{file:string, sessionId:string, shell:string, cwd:string|null, ide:string, pid:number|null}>} */
   scan() {
     const found = [];
     for (const dir of [this.#dir, ...this.#extraDirs()]) {
-      if (this.#seenDirs.has(dir) && !this.#rescan(dir)) continue;
+      // Incomplete sidecars are retried even when the directory mtime does not
+      // change (for example, a sidecar that is written in place after creation).
+      const hasPending = [...this.#pending].some(file => dirname(file) === dir);
+      if (this.#seenDirs.has(dir) && !hasPending && !this.#rescan(dir)) continue;
       this.#seenDirs.add(dir);
       let entries;
       try {
@@ -263,12 +284,24 @@ export class TranscriptDiscovery {
         continue;
       }
       for (const f of entries) {
-        if (!f.endsWith('.log') || this.#known.has(f)) continue;
+        if (!f.endsWith('.log')) continue;
         const full = join(dir, f);
+        const previous = this.#known.get(full);
+        if (previous && !this.#pending.has(full)) continue;
         const meta = readMeta(full + '.json', f);
         if (!meta) continue;
-        this.#known.add(f);
-        found.push(meta);
+        const next = { ...meta, file: full };
+        const changed = !previous || !sameSessionMeta(previous, next);
+        this.#known.set(full, next);
+
+        const incomplete = !Number.isSafeInteger(next.pid)
+          || next.pid <= 0
+          || typeof next.cwd !== 'string'
+          || !next.cwd.trim();
+        if (incomplete) this.#pending.add(full);
+        else this.#pending.delete(full);
+
+        if (changed) found.push(next);
       }
     }
     return found;
@@ -290,11 +323,25 @@ export class TranscriptDiscovery {
     }
   }
 
-  #sizes = new Map();
-
   get dir() {
     return this.#dir;
   }
+}
+
+/** Compare only sidecar fields that affect attribution and session identity. */
+function sameSessionMeta(a, b) {
+  return ['sessionId', 'shell', 'cwd', 'ide', 'pid', 'startedAt']
+    .every(key => a[key] === b[key]);
+}
+
+/** Stable partition that keeps PID-present sessions ahead of exited/unknown ones. */
+export function prioritizePidPresentSessions(sessions) {
+  const present = [];
+  const other = [];
+  for (const session of sessions) {
+    (session.status === 'pid-present' ? present : other).push(session);
+  }
+  return [...present, ...other];
 }
 
 function readMeta(sidecar, filename) {
