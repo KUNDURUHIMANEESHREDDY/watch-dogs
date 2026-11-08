@@ -18,6 +18,13 @@ const successfulResults = [
   'security=success',
 ];
 
+/**
+ * Extract one top-level job block from a GitHub Actions workflow.
+ *
+ * @param {string} source - Complete workflow YAML source.
+ * @param {string} name - Job identifier to locate.
+ * @returns {string} The selected job block.
+ */
 function workflowJob(source, name) {
   const lines = source.split('\n');
   const start = lines.findIndex(line => line === `  ${name}:`);
@@ -26,6 +33,13 @@ function workflowJob(source, name) {
   return lines.slice(start, next === -1 ? undefined : next).join('\n');
 }
 
+/**
+ * Extract one named step block from a workflow job.
+ *
+ * @param {string} job - Complete job YAML block.
+ * @param {string} name - Human-readable step name to locate.
+ * @returns {string} The selected step block.
+ */
 function workflowStep(job, name) {
   const lines = job.split('\n');
   const marker = `      - name: ${name}`;
