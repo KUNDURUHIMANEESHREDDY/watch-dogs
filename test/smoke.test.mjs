@@ -137,7 +137,7 @@ test('wd status keeps PID-present sessions visible beyond the history display li
       "};",
       "syncBuiltinESMExports();",
       "",
-    ].join('\\n'), 'utf8');
+    ].join('\n'), 'utf8');
 
     const stdout = execFileSync(process.execPath, ['--require', preload, join(ROOT, 'bin', 'wd.js'), 'status'], {
       cwd: ROOT,
@@ -147,8 +147,8 @@ test('wd status keeps PID-present sessions visible beyond the history display li
     });
 
     assert.match(stdout, /7 discovered, 1 PID present/);
-    assert.equal((stdout.match(/^[ \\t]+pid-present[ \\t]+powershell\\b.*\\bsession=ps-live-after-limit\\b/gm) ?? []).length, 1);
-    assert.equal((stdout.match(/^[ \\t]+exited[ \\t]+powershell\\b.*\\bsession=ps-exited-\\d+\\b/gm) ?? []).length, 4);
+    assert.equal((stdout.match(/^[ \t]+pid-present[ \t]+powershell\b.*\bsession=ps-live-after-limit\b/gm) ?? []).length, 1);
+    assert.equal((stdout.match(/^[ \t]+exited[ \t]+powershell\b.*\bsession=ps-exited-\d+\b/gm) ?? []).length, 4);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
