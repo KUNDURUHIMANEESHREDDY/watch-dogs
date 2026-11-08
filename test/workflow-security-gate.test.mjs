@@ -18,20 +18,29 @@ const successfulResults = [
   'security=success',
 ];
 
+function workflowJob(source, name) {
+  const lines = source.split('\n');
+  const start = lines.findIndex(line => line === `  ${name}:`);
+  assert.notEqual(start, -1, `workflow must declare the ${name} job`);
+  const next = lines.findIndex((line, index) => index > start && /^  [a-z0-9-]+:\s*$/.test(line));
+  return lines.slice(start, next === -1 ? undefined : next).join('\n');
+}
+
 test('security workflow is reusable by the CI release gate', () => {
   assert.match(security, /^  workflow_call:\s*$/m);
 });
 
 test('CI invokes the security workflow without inheriting unrelated repository secrets', () => {
-  assert.match(ci, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml$/m);
-  assert.doesNotMatch(ci, /secrets:\s*inherit/);
+  const securityJob = workflowJob(ci, 'security');
+  assert.match(securityJob, /^  security:\n    name: Security\n    uses: \.\/\.github\/workflows\/security\.yml$/);
+  assert.doesNotMatch(securityJob, /^    secrets:\s*inherit\s*$/m);
   assert.match(security, /^  workflow_call:\s*$/m);
   assert.match(security, /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
   assert.match(security, /permissions:\n  contents: read/);
 });
 
 test('the single required aggregate maps every dependency to its matching result', () => {
-  const required = ci.slice(ci.indexOf('  required:\n'));
+  const required = workflowJob(ci, 'required');
   const expected = [
     ['core-tests', 'CORE_TESTS_RESULT'],
     ['frontend-e2e', 'FRONTEND_E2E_RESULT'],
@@ -40,31 +49,31 @@ test('the single required aggregate maps every dependency to its matching result
     ['security', 'SECURITY_RESULT'],
   ];
 
-  const needsMatch = required.match(/^\s+needs:\s*\[([^\]]+)\]/m);
+  const needsMatch = required.match(/^    needs:\s*\[([^\]]+)\]/m);
   assert.ok(needsMatch, 'required aggregate must declare its dependency list');
   const dependencies = needsMatch[1].split(',').map(name => name.trim()).sort();
   assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
 
-  const envMappings = required.split('\n').flatMap(line => {
-    const match = line.match(/^\s+([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z0-9-]+)\.result\s*\}\}$/);
-    return match ? [[match[2], match[1]]] : [];
-  });
-  assert.deepEqual(envMappings, expected, 'each environment variable must map to its matching dependency');
+  const envStart = required.indexOf('\n        env:\n');
+  const runStart = required.indexOf('\n        run:\n');
+  assert.ok(envStart >= 0 && runStart > envStart, 'required aggregate must define an env block before its gate command');
+  const envBlock = required.slice(envStart, runStart);
+  const envMappings = [...envBlock.matchAll(/^          ([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z0-9-]+)\.result\s*\}\}$/gm)]
+    .map(([, variable, name]) => [name, variable]);
+  assert.deepEqual(envMappings, expected, 'each gate result variable must map to the matching required dependency');
 
-  const gateArguments = expected.map(([name, variable], index) => {
-    const continuation = index < expected.length - 1 ? ' \\' : '';
-    return '            "' + name + '=$' + variable + '"' + continuation;
-  });
-  const gateCommand = [
+  const expectedRun = [
     '        run: |',
     '          node scripts/require-successful-jobs.mjs \\',
-    ...gateArguments,
+    ...expected.map(([name, variable], index) =>
+      `            "${name}=$${variable}"${index < expected.length - 1 ? ' \\\' : ''}`),
   ].join('\n');
-  assert.ok(required.includes(gateCommand), 'required aggregate must invoke the gate with the matching dependency results');
+  assert.ok(required.includes(expectedRun), 'required aggregate must invoke the executable gate with the exact dependency/result pairs');
+
+  assert.match(required, /^    if: always\(\)$/m);
   assert.match(required, /uses: actions\/checkout@v7/);
   assert.match(required, /uses: actions\/setup-node@v7/);
   assert.match(required, /node-version: 22/);
-  assert.match(required, /node scripts\/require-successful-jobs\.mjs/);
 });
 
 test('the release gate accepts only an all-success dependency set', () => {
