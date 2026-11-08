@@ -62,11 +62,15 @@ test('the single required aggregate maps every dependency to its matching result
     .map(([, variable, name]) => [name, variable]);
   assert.deepEqual(envMappings, expected, 'each gate result variable must map to the matching required dependency');
 
+  const slash = String.fromCharCode(92);
   const expectedRun = [
     '        run: |',
-    '          node scripts/require-successful-jobs.mjs \\',
-    ...expected.map(([name, variable], index) =>
-      `            "${name}=$${variable}"${index < expected.length - 1 ? ' \\\' : ''}`),
+    '          node scripts/require-successful-jobs.mjs ' + slash,
+    '            "core-tests=$CORE_TESTS_RESULT" ' + slash,
+    '            "frontend-e2e=$FRONTEND_E2E_RESULT" ' + slash,
+    '            "frontend-build=$FRONTEND_BUILD_RESULT" ' + slash,
+    '            "gateway-e2e=$GATEWAY_E2E_RESULT" ' + slash,
+    '            "security=$SECURITY_RESULT"',
   ].join('\n');
   assert.ok(required.includes(expectedRun), 'required aggregate must invoke the executable gate with the exact dependency/result pairs');
 
