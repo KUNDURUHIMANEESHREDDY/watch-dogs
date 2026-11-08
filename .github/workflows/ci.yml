@@ -128,28 +128,42 @@ jobs:
       - name: Build frontend
         run: npm run web:build
 
+  security:
+    name: Security
+    uses: ./.github/workflows/security.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
   required:
     name: required
     # This aggregate is the single check repository Settings should require.
     # It fails closed if any CI job fails, is cancelled, or is unexpectedly skipped.
     if: always()
-    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e]
+    needs: [core-tests, frontend-e2e, frontend-build, gateway-e2e, security]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Check out the release-gate helper
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js for the release gate
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Enforce all release checks
         env:
           CORE_TESTS_RESULT: ${{ needs.core-tests.result }}
           FRONTEND_E2E_RESULT: ${{ needs.frontend-e2e.result }}
           FRONTEND_BUILD_RESULT: ${{ needs.frontend-build.result }}
           GATEWAY_E2E_RESULT: ${{ needs.gateway-e2e.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
         run: |
-          set -euo pipefail
-          echo "core-tests: $CORE_TESTS_RESULT"
-          echo "frontend-e2e: $FRONTEND_E2E_RESULT"
-          echo "frontend-build: $FRONTEND_BUILD_RESULT"
-          echo "gateway-e2e: $GATEWAY_E2E_RESULT"
-          test "$CORE_TESTS_RESULT" = "success"
-          test "$FRONTEND_E2E_RESULT" = "success"
-          test "$FRONTEND_BUILD_RESULT" = "success"
-          test "$GATEWAY_E2E_RESULT" = "success"
+          node scripts/require-successful-jobs.mjs \
+            "core-tests=$CORE_TESTS_RESULT" \
+            "frontend-e2e=$FRONTEND_E2E_RESULT" \
+            "frontend-build=$FRONTEND_BUILD_RESULT" \
+            "gateway-e2e=$GATEWAY_E2E_RESULT" \
+            "security=$SECURITY_RESULT"
