@@ -171,7 +171,7 @@ test('tailer refresh updates metadata for an already tracked transcript', async 
       assert.equal(tailer.refresh(log, {
         sessionId: 'ps-refresh', pid: process.pid, cwd: dir, ide: 'VS Code / Cursor',
       }), true);
-      appendFileSync(log, 'metadata refreshed\\n');
+      appendFileSync(log, 'metadata refreshed\n');
       tailer.poll();
       assert.equal(delivered.length, 1);
       assert.equal(delivered[0].line, 'metadata refreshed');
