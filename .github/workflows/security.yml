@@ -65,18 +65,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up Go for the pinned Gitleaks CLI
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.24.0"
-          cache: false
-
-      - name: Install pinned Gitleaks CLI
-        run: go install github.com/zricethezav/gitleaks/v8@v8.24.3
-
-      - name: Scan all checked-out Git history with Gitleaks
+      - name: Scan all checked-out Git history with pinned Gitleaks
         run: |
-          "$(go env GOPATH)/bin/gitleaks" detect --source . --log-opts="--all" --redact --no-banner --exit-code 1
+          docker run --rm --network none --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/repo,readonly" \
+            ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb \
+            detect --source /repo --log-opts="--all" --redact --no-banner --exit-code 1
 
   sbom:
     name: Generate dependency SBOMs
