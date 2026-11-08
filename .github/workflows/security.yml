@@ -151,16 +151,16 @@ jobs:
       - name: Enforce all security checks
         env:
           DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
-          SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
+          GITLEAKS_RESULT: ${{ needs.secret-scan.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
         run: |
           set -euo pipefail
           echo "dependency-audit: $DEPENDENCY_AUDIT_RESULT"
-          echo "secret-scan: $SECRET_SCAN_RESULT"
+          echo "gitleaks: $GITLEAKS_RESULT"
           echo "sbom: $SBOM_RESULT"
           echo "codeql: $CODEQL_RESULT"
           test "$DEPENDENCY_AUDIT_RESULT" = "success"
-          test "$SECRET_SCAN_RESULT" = "success"
+          test "$GITLEAKS_RESULT" = "success"
           test "$SBOM_RESULT" = "success"
           test "$CODEQL_RESULT" = "success"
