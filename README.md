@@ -31,8 +31,11 @@ product, and this is the whole of it:
 | Detached work started from an instrumented shell (`npm test`, `pytest`, `node server.js`) | process identity and lifecycle, attributed by walking parent processes |
 
 `wd init` wires the profile block that makes the first row true. `wd doctor` reports
-which of it is live on this machine right now, and `wd status` is the same check at a
-glance.
+which capture layers are enabled and which transcript sidecars it can discover; `wd status`
+shows the same discovered sessions alongside findings. Session state is labelled `PID present`,
+`exited`, or `unknown`. PID presence is a best-effort liveness hint, not proof that the same
+process instance still owns that PID. A terminal opened before installation is not covered
+until it is reopened.
 
 **Deliberately out of scope.** These are decisions, not defects, and are listed here
 so nobody later reads them as bugs still waiting to be fixed:

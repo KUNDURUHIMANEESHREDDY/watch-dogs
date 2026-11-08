@@ -1,7 +1,7 @@
 import { loadConfig, saveConfig } from '../src/core/config.mjs';
 import { initLog, log } from '../src/core/log.mjs';
 import { Watcher } from '../src/core/watcher.mjs';
-import { TranscriptTailer, SessionRegistry, TranscriptDiscovery, transcriptDir } from '../src/capture/shell.mjs';
+import { TranscriptTailer, TranscriptDiscovery, transcriptDir, pidAlive } from '../src/capture/shell.mjs';
 import { ProcessWatcher } from '../src/capture/procwatch.mjs';
 import { ConptyLayer } from '../src/capture/conpty.mjs';
 import { listRules, evaluate } from '../src/analyze/rules.mjs';
@@ -177,7 +177,6 @@ function cmdUninstall() {
 function cmdStart(flags) {
   const cfg = loadConfig();
   const watcher = new Watcher(cfg);
-  const registry = new SessionRegistry(cfg.paths.data);
 
   // Refuse a second daemon before anything writes. Two writers appending to one
   // findings log is a quiet corruption, not an error anyone would notice.
@@ -227,6 +226,11 @@ function cmdStart(flags) {
   // WD_TRANSCRIPT_DIR overrides the location so an integration test can run in
   // isolation instead of tailing -- and deleting -- the live daemon's directory.
   const discovery = new TranscriptDiscovery(transcriptDir());
+  // Keep only PID-present sessions for process-to-shell cwd attribution. The
+  // transcript itself is still tracked even after its shell exits so final output
+  // is not lost. PID presence is deliberately a best-effort signal, not proof of
+  // process identity (Windows does not expose a portable start-time check here).
+  const activeSessions = new Map();
   const adopt = () => {
     for (const t of discovery.scan()) {
       // Only the daemon's own transcript is skipped -- tracking it would feed the
@@ -236,10 +240,13 @@ function cmdStart(flags) {
       // decides how far back to read.
       if (t.pid === process.pid) continue;
       tailer.track(t.file, t);
+      if (Number.isSafeInteger(t.pid) && t.pid > 0 && pidAlive(t.pid)) {
+        activeSessions.set(t.pid, t);
+      }
       out(col('c', '+ watching ') + t.shell + ' ' + t.sessionId + '  ' + col('d', '[' + t.ide + ']'));
     }
-    for (const s of registry.list()) {
-      if (s.status === 'live' && s.transcript) tailer.track(s.transcript, s);
+    for (const [pid] of activeSessions) {
+      if (!pidAlive(pid)) activeSessions.delete(pid);
     }
   };
   adopt();
@@ -258,8 +265,8 @@ function cmdStart(flags) {
     const sessionsByPid = () => {
       if (Date.now() - cwdCache.at < 1000) return cwdCache.byPid;
       const byPid = new Map();
-      for (const s of registry.list()) {
-        if (s.status === 'live' && s.pid && s.cwd) byPid.set(s.pid, s.cwd);
+      for (const [pid, s] of activeSessions) {
+        if (s.cwd) byPid.set(pid, s.cwd);
       }
       cwdCache = { at: Date.now(), byPid };
       return byPid;
@@ -464,13 +471,13 @@ async function cmdDoctor(flags) {
   out('  ' + col('d', 'IDE terminals load the PowerShell profile, so coverage follows the profile block.'));
   out('');
 
-  const reg = new SessionRegistry(cfg.paths.data);
-  const sessions = reg.list();
-  out(col('b', `sessions (${sessions.length})`));
+  const sessions = discoverTranscriptSessions();
+  const pidPresent = sessions.filter((s) => s.status === 'pid-present').length;
+  out(col('b', `sessions (${sessions.length} discovered; ${pidPresent} PID present)`));
   for (const s of sessions.slice(-8)) {
-    out(`  ${s.status.padEnd(7)} ${String(s.shell).padEnd(12)} ${s.ide.padEnd(18)} ${s.cwd}`);
+    out(`  ${s.status.padEnd(11)} ${String(s.shell).padEnd(12)} ${String(s.ide).padEnd(18)} ${s.cwd ?? ''}`);
   }
-  if (!sessions.length) out('  ' + col('d', 'none yet - start a terminal and run `wd start` in another'));
+  if (!sessions.length) out('  ' + col('d', 'no transcript sidecars found yet - open a new instrumented shell'));
 }
 
 /**
@@ -514,10 +521,13 @@ function cmdStatus() {
     out('  ' + col('b', 'langfuse'.padEnd(15)) + ' ' + col('d', 'off (set LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY to enable)'));
   }
 
-  const sessions = new SessionRegistry(cfg.paths.data).list();
-  const live = sessions.filter((s) => s.status === 'live');
-  out('  ' + col('b', 'sessions'.padEnd(15)) + ' ' + sessions.length + ' recorded, ' + live.length + ' live');
-  for (const s of live.slice(-5)) out(col('d', '    ' + String(s.shell).padEnd(12) + (s.ide ?? '')));
+  const sessions = discoverTranscriptSessions();
+  const pidPresent = sessions.filter((s) => s.status === 'pid-present');
+  out('  ' + col('b', 'sessions'.padEnd(15)) + ' ' + sessions.length + ' discovered, ' + pidPresent.length + ' PID present');
+  for (const s of sessions.slice(-5)) {
+    out(col('d', '    ' + s.status.padEnd(11) + ' ' + String(s.shell).padEnd(12) + String(s.ide ?? '').padEnd(18) + (s.cwd ?? '')));
+  }
+  if (sessions.length) out(col('d', '    PID presence is best-effort; it does not prove process identity.'));
 
   const seen = new Map();
   for (const f of loadFindingsFile(cfg)) seen.set((f.signature ?? '') + (f.sessionId ?? ''), f);
@@ -530,6 +540,15 @@ function cmdStatus() {
   out('  ' + col('b', 'findings'.padEnd(15)) + ' ' + (seen.size ? summary : col('d', 'none recorded')));
   out('');
   out(col('d', '  wd findings   full list        wd doctor   coverage report'));
+}
+
+function discoverTranscriptSessions() {
+  return new TranscriptDiscovery(transcriptDir()).scan().map((session) => ({
+    ...session,
+    status: Number.isSafeInteger(session.pid) && session.pid > 0
+      ? (pidAlive(session.pid) ? 'pid-present' : 'exited')
+      : 'unknown',
+  }));
 }
 
 function loadFindingsFile(cfg) {
