@@ -1,7 +1,7 @@
 import { loadConfig, saveConfig } from '../src/core/config.mjs';
 import { initLog, log } from '../src/core/log.mjs';
 import { Watcher } from '../src/core/watcher.mjs';
-import { TranscriptTailer, TranscriptDiscovery, transcriptDir, pidAlive } from '../src/capture/shell.mjs';
+import { TranscriptTailer, TranscriptDiscovery, transcriptDir, pidAlive, prioritizePidPresentSessions } from '../src/capture/shell.mjs';
 import { ProcessWatcher } from '../src/capture/procwatch.mjs';
 import { ConptyLayer } from '../src/capture/conpty.mjs';
 import { listRules, evaluate } from '../src/analyze/rules.mjs';
@@ -239,11 +239,12 @@ function cmdStart(flags) {
       // written by the time we discover it, and TranscriptTailer.track() is what
       // decides how far back to read.
       if (t.pid === process.pid) continue;
-      tailer.track(t.file, t);
+      const refreshed = tailer.refresh(t.file, t);
+      if (!refreshed) tailer.track(t.file, t);
       if (Number.isSafeInteger(t.pid) && t.pid > 0 && pidAlive(t.pid)) {
         activeSessions.set(t.pid, t);
       }
-      out(col('c', '+ watching ') + t.shell + ' ' + t.sessionId + '  ' + col('d', '[' + t.ide + ']'));
+      out(col('c', (refreshed ? '+ refreshed ' : '+ watching ') + t.shell + ' ' + t.sessionId + '  ' + col('d', '[' + t.ide + ']')));
     }
     for (const [pid] of activeSessions) {
       if (!pidAlive(pid)) activeSessions.delete(pid);
@@ -471,11 +472,11 @@ async function cmdDoctor(flags) {
   out('  ' + col('d', 'IDE terminals load the PowerShell profile, so coverage follows the profile block.'));
   out('');
 
-  const sessions = discoverTranscriptSessions();
+  const sessions = prioritizePidPresentSessions(discoverTranscriptSessions());
   const pidPresent = sessions.filter((s) => s.status === 'pid-present').length;
   out(col('b', `sessions (${sessions.length} discovered; ${pidPresent} PID present)`));
-  for (const s of sessions.slice(-8)) {
-    out(`  ${s.status.padEnd(11)} ${String(s.shell).padEnd(12)} ${String(s.ide).padEnd(18)} ${s.cwd ?? ''}`);
+  for (const s of sessions.slice(0, 8)) {
+    out(`  ${s.status.padEnd(11)} ${String(s.shell).padEnd(12)} ${String(s.ide).padEnd(18)} pid=${s.pid ?? '-'} session=${String(s.sessionId ?? 'unknown')} ${s.cwd ?? ''}`);
   }
   if (!sessions.length) out('  ' + col('d', 'no transcript sidecars found yet - open a new instrumented shell'));
 }
@@ -524,8 +525,8 @@ function cmdStatus() {
   const sessions = discoverTranscriptSessions();
   const pidPresent = sessions.filter((s) => s.status === 'pid-present');
   out('  ' + col('b', 'sessions'.padEnd(15)) + ' ' + sessions.length + ' discovered, ' + pidPresent.length + ' PID present');
-  for (const s of sessions.slice(-5)) {
-    out(col('d', '    ' + s.status.padEnd(11) + ' ' + String(s.shell).padEnd(12) + String(s.ide ?? '').padEnd(18) + (s.cwd ?? '')));
+  for (const s of sessions.slice(0, 5)) {
+    out(col('d', '    ' + s.status.padEnd(11) + ' ' + String(s.shell).padEnd(12) + String(s.ide ?? '').padEnd(18) + ' pid=' + (s.pid ?? '-') + ' session=' + String(s.sessionId ?? 'unknown') + ' ' + (s.cwd ?? '')));
   }
   if (sessions.length) out(col('d', '    PID presence is best-effort; it does not prove process identity.'));
 
