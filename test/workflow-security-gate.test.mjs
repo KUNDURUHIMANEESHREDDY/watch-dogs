@@ -66,8 +66,11 @@ test('CI invokes the security workflow without inheriting unrelated repository s
   ].join('\n'));
   assert.doesNotMatch(securityJob, /^    secrets:\s*inherit\s*$/m);
   assert.match(security, /^  workflow_call:\s*$/m);
-  assert.match(security, /GITHUB_TOKEN:\s*\$\{\{\s*github\.token\s*\}\}/);
-  assert.match(security, /GITLEAKS_ENABLE_COMMENTS:\s*"false"/);
+  const secretScan = workflowJob(security, 'secret-scan');
+  assert.match(secretScan, /fetch-depth: 0/);
+  assert.match(secretScan, /persist-credentials: false/);
+  assert.match(secretScan, /GITLEAKS_ENABLE_COMMENTS:\s*"false"/);
+  assert.doesNotMatch(secretScan, /GITHUB_TOKEN/);
   assert.match(security, /^  codeql:\s*$/m);
   assert.match(security, /^  security-required:\s*$/m);
   assert.match(security, /permissions:\n  contents: read/);
