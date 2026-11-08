@@ -84,6 +84,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
     assert.match(stdout, /2 discovered, 1 PID present/);
     assert.match(stdout, /pid-present\s+powershell/);
     assert.match(stdout, /exited\s+powershell/);
+    assert.match(stdout, /session=ps-active/);
+    assert.match(stdout, /session=ps-exited/);
     assert.match(stdout, /PID presence is best-effort/);
 
     // Doctor and status must use the same transcript-sidecar source; otherwise
@@ -97,6 +99,8 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
     assert.match(doctorOutput, /2 discovered; 1 PID present/);
     assert.match(doctorOutput, /pid-present\s+powershell/);
     assert.match(doctorOutput, /exited\s+powershell/);
+    assert.match(doctorOutput, /session=ps-active/);
+    assert.match(doctorOutput, /session=ps-exited/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
