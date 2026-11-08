@@ -123,7 +123,23 @@ test('wd status keeps PID-present sessions visible beyond the history display li
       shell: 'powershell', pid: process.pid, cwd: ROOT, ide: 'VS Code / Cursor',
     }), 'utf8');
 
-    const stdout = execFileSync(process.execPath, [join(ROOT, 'bin', 'wd.js'), 'status'], {
+    const preload = join(dir, 'order-readdir.cjs');
+    writeFileSync(preload, [
+      "const fs = require('node:fs');",
+      "const { syncBuiltinESMExports } = require('node:module');",
+      "const readdirSync = fs.readdirSync;",
+      "fs.readdirSync = function (path, options) {",
+      "  const entries = readdirSync(path, options);",
+      "  if (path === process.env.WD_TRANSCRIPT_DIR && options === undefined) {",
+      "    entries.sort((a, b) => Number(a === 'ps-live-after-limit.log') - Number(b === 'ps-live-after-limit.log'));",
+      "  }",
+      "  return entries;",
+      "};",
+      "syncBuiltinESMExports();",
+      "",
+    ].join('\\n'), 'utf8');
+
+    const stdout = execFileSync(process.execPath, ['--require', preload, join(ROOT, 'bin', 'wd.js'), 'status'], {
       cwd: ROOT,
       encoding: 'utf8',
       timeout: 30_000,
@@ -131,8 +147,8 @@ test('wd status keeps PID-present sessions visible beyond the history display li
     });
 
     assert.match(stdout, /7 discovered, 1 PID present/);
-    assert.match(stdout, /session=ps-live-after-limit/);
-    assert.doesNotMatch(stdout, /session=ps-exited-5/);
+    assert.equal((stdout.match(/^[ \\t]+pid-present[ \\t]+powershell\\b.*\\bsession=ps-live-after-limit\\b/gm) ?? []).length, 1);
+    assert.equal((stdout.match(/^[ \\t]+exited[ \\t]+powershell\\b.*\\bsession=ps-exited-\\d+\\b/gm) ?? []).length, 4);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
