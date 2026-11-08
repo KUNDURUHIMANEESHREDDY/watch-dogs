@@ -106,6 +106,38 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
   }
 });
 
+test('wd status keeps PID-present sessions visible beyond the history display limit', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd-session-priority-'));
+  try {
+    for (let index = 0; index < 6; index++) {
+      const file = join(dir, `ps-exited-${index}.log`);
+      writeFileSync(file, 'completed transcript\\n', 'utf8');
+      writeFileSync(file + '.json', JSON.stringify({
+        shell: 'powershell', pid: 2147483647, cwd: ROOT, ide: 'Windows Terminal',
+      }), 'utf8');
+    }
+
+    const liveFile = join(dir, 'ps-live-after-limit.log');
+    writeFileSync(liveFile, 'active transcript\\n', 'utf8');
+    writeFileSync(liveFile + '.json', JSON.stringify({
+      shell: 'powershell', pid: process.pid, cwd: ROOT, ide: 'VS Code / Cursor',
+    }), 'utf8');
+
+    const stdout = execFileSync(process.execPath, [join(ROOT, 'bin', 'wd.js'), 'status'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, WD_TRANSCRIPT_DIR: dir, NO_COLOR: '1' },
+    });
+
+    assert.match(stdout, /7 discovered, 1 PID present/);
+    assert.match(stdout, /session=ps-live-after-limit/);
+    assert.doesNotMatch(stdout, /session=ps-exited-5/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('transcript discovery refreshes a sidecar created after the log', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'wd-late-sidecar-'));
   try {
