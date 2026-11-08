@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -104,6 +104,100 @@ test('wd status discovers transcript sidecars and distinguishes PID presence fro
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('transcript discovery refreshes a sidecar created after the log', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd-late-sidecar-'));
+  try {
+    const log = join(dir, 'ps-late.log');
+    writeFileSync(log, '');
+    const { TranscriptDiscovery } = await load('src/capture/shell.mjs');
+    const discovery = new TranscriptDiscovery(dir);
+    const first = discovery.scan();
+    assert.equal(first.length, 1);
+    assert.equal(first[0].pid, null);
+    assert.equal(first[0].cwd, null);
+
+    writeFileSync(log + '.json', JSON.stringify({
+      shell: 'powershell', pid: process.pid, cwd: dir, ide: 'VS Code / Cursor',
+    }));
+    const refreshed = discovery.scan();
+    assert.equal(refreshed.length, 1);
+    assert.equal(refreshed[0].pid, process.pid);
+    assert.equal(refreshed[0].cwd, dir);
+    assert.deepEqual(discovery.scan(), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('transcript discovery retries a sidecar updated in place', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd-partial-sidecar-'));
+  try {
+    const log = join(dir, 'ps-partial.log');
+    writeFileSync(log, '');
+    writeFileSync(log + '.json', '{');
+    const { TranscriptDiscovery } = await load('src/capture/shell.mjs');
+    const discovery = new TranscriptDiscovery(dir);
+    assert.equal(discovery.scan()[0].pid, null);
+
+    // Updating an existing sidecar does not change the directory mtime.
+    writeFileSync(log + '.json', JSON.stringify({
+      shell: 'powershell', pid: process.pid, cwd: dir, ide: 'Windows Terminal',
+    }));
+    const refreshed = discovery.scan();
+    assert.equal(refreshed.length, 1);
+    assert.equal(refreshed[0].pid, process.pid);
+    assert.equal(refreshed[0].cwd, dir);
+    assert.equal(refreshed[0].ide, 'Windows Terminal');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('tailer refresh updates metadata for an already tracked transcript', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wd-tailer-refresh-'));
+  try {
+    const log = join(dir, 'ps-refresh.log');
+    writeFileSync(log, '');
+    const { TranscriptTailer } = await load('src/capture/shell.mjs');
+    const delivered = [];
+    const tailer = new TranscriptTailer({
+      onLines: (line, meta) => delivered.push({ line, meta }),
+      pollMs: 60_000,
+    });
+    try {
+      tailer.track(log, { sessionId: 'ps-refresh', pid: null, cwd: null });
+      assert.equal(tailer.refresh(log, {
+        sessionId: 'ps-refresh', pid: process.pid, cwd: dir, ide: 'VS Code / Cursor',
+      }), true);
+      appendFileSync(log, 'metadata refreshed\\n');
+      tailer.poll();
+      assert.equal(delivered.length, 1);
+      assert.equal(delivered[0].line, 'metadata refreshed');
+      assert.equal(delivered[0].meta.pid, process.pid);
+      assert.equal(delivered[0].meta.cwd, dir);
+    } finally {
+      tailer.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PID-present sessions are stably prioritized before display limits', async () => {
+  const { prioritizePidPresentSessions } = await load('src/capture/shell.mjs');
+  const sessions = [
+    { sessionId: 'exited-a', status: 'exited' },
+    { sessionId: 'live-a', status: 'pid-present' },
+    { sessionId: 'unknown-a', status: 'unknown' },
+    { sessionId: 'live-b', status: 'pid-present' },
+    { sessionId: 'exited-b', status: 'exited' },
+  ];
+  assert.deepEqual(
+    prioritizePidPresentSessions(sessions).map(session => session.sessionId),
+    ['live-a', 'live-b', 'exited-a', 'unknown-a', 'exited-b'],
+  );
 });
 
 test('config loads and defaults to a valid autonomy', async () => {
