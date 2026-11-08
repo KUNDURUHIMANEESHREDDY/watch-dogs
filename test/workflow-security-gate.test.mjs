@@ -26,6 +26,15 @@ function workflowJob(source, name) {
   return lines.slice(start, next === -1 ? undefined : next).join('\n');
 }
 
+function workflowStep(job, name) {
+  const lines = job.split('\n');
+  const marker = `      - name: ${name}`;
+  const start = lines.findIndex(line => line === marker);
+  assert.notEqual(start, -1, `job must declare the ${name} step`);
+  const next = lines.findIndex((line, index) => index > start && /^      - name:/.test(line));
+  return lines.slice(start, next === -1 ? undefined : next).join('\n');
+}
+
 test('security workflow is reusable by the CI release gate', () => {
   assert.match(security, /^  workflow_call:\s*$/m);
 });
@@ -58,13 +67,14 @@ test('the single required aggregate maps every dependency to its matching result
   const dependencies = needsMatch[1].split(',').map(name => name.trim()).sort();
   assert.deepEqual(dependencies, expected.map(([name]) => name).sort());
 
-  const envStart = required.indexOf('\n        env:\n');
-  const runStart = required.indexOf('\n        run: |\n');
-  assert.ok(envStart >= 0 && runStart > envStart, 'required aggregate must define an env block before its gate command');
-  const envBlock = required.slice(envStart, runStart);
+  const gateStep = workflowStep(required, 'Enforce all release checks');
+  const envStart = gateStep.indexOf('\n        env:\n');
+  const runStart = gateStep.indexOf('\n        run: |\n');
+  assert.ok(envStart >= 0 && runStart > envStart, 'the gate step must define its own env block before its run block');
+  const envBlock = gateStep.slice(envStart, runStart);
   const envMappings = [...envBlock.matchAll(/^          ([A-Z0-9_]+_RESULT):\s*\$\{\{\s*needs\.([a-z0-9-]+)\.result\s*\}\}$/gm)]
     .map(([, variable, name]) => [name, variable]);
-  assert.deepEqual(envMappings, expected, 'each gate result variable must map to the matching required dependency');
+  assert.deepEqual(envMappings, expected, 'the gate step must map each result variable to its matching required dependency');
 
   const slash = String.fromCharCode(92);
   const expectedRun = [
@@ -76,7 +86,8 @@ test('the single required aggregate maps every dependency to its matching result
     '            "gateway-e2e=$GATEWAY_E2E_RESULT" ' + slash,
     '            "security=$SECURITY_RESULT"',
   ].join('\n');
-  assert.ok(required.includes(expectedRun), 'required aggregate must invoke the executable gate with the exact dependency/result pairs');
+  const actualRun = gateStep.slice(runStart + 1).trimEnd();
+  assert.equal(actualRun, expectedRun, 'the complete gate step command must exactly match the expected invocation');
 
   assert.match(required, /^    if: always\(\)$/m);
   assert.match(required, /uses: actions\/checkout@v7/);
