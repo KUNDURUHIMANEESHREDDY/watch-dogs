@@ -74,6 +74,9 @@ test('CI invokes the security workflow without inheriting unrelated repository s
   assert.match(secretScan, /detect --source \/repo --log-opts=\"--all\" --redact --no-banner --exit-code 1/);
   assert.doesNotMatch(secretScan, /GITHUB_TOKEN|gitleaks-action|setup-go/);
   assert.match(security, /^  codeql:\s*$/m);
+  const securityRequired = workflowJob(security, 'security-required');
+  assert.match(securityRequired, /GITLEAKS_RESULT:/);
+  assert.doesNotMatch(securityRequired, /SECRET_SCAN_RESULT/);
   assert.match(security, /^  security-required:\s*$/m);
   assert.match(security, /permissions:\n  contents: read/);
 });
