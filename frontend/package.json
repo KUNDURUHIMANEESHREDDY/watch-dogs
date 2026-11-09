@@ -12,7 +12,7 @@
     "test:e2e:gateway": "playwright test --config playwright.gateway.config.ts"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.90.5",
+    "@tanstack/react-query": "^5.106.1",
     "@xyflow/react": "^12.8.6",
     "lucide-react": "^1.60.0",
     "react": "^19.2.0",
