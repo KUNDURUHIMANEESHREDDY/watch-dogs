@@ -2,6 +2,7 @@ import { loadConfig, saveConfig } from '../src/core/config.mjs';
 import { initLog, log } from '../src/core/log.mjs';
 import { Watcher } from '../src/core/watcher.mjs';
 import { TranscriptTailer, TranscriptDiscovery, transcriptDir, pidAlive, prioritizePidPresentSessions } from '../src/capture/shell.mjs';
+import { adoptTranscript } from '../src/capture/session-adoption.mjs';
 import { ProcessWatcher } from '../src/capture/procwatch.mjs';
 import { ConptyLayer } from '../src/capture/conpty.mjs';
 import { listRules, evaluate } from '../src/analyze/rules.mjs';
@@ -239,12 +240,12 @@ function cmdStart(flags) {
       // written by the time we discover it, and TranscriptTailer.track() is what
       // decides how far back to read.
       if (t.pid === process.pid) continue;
-      const refreshed = tailer.refresh(t.file, t);
-      if (!refreshed) tailer.track(t.file, t);
+      adoptTranscript(tailer, t, (session) => {
+        out(col('c', '+ watching ') + session.shell + ' ' + session.sessionId + '  ' + col('d', '[' + session.ide + ']'));
+      });
       if (Number.isSafeInteger(t.pid) && t.pid > 0 && pidAlive(t.pid)) {
         activeSessions.set(t.pid, t);
       }
-      out(col('c', (refreshed ? '+ refreshed ' : '+ watching ') + t.shell + ' ' + t.sessionId + '  ' + col('d', '[' + t.ide + ']')));
     }
     for (const [pid] of activeSessions) {
       if (!pidAlive(pid)) activeSessions.delete(pid);
