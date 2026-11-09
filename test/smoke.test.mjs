@@ -23,6 +23,7 @@ const MODULES = [
   'src/core/watcher.mjs',
   'src/capture/stream.mjs',
   'src/capture/shell.mjs',
+  'src/capture/session-adoption.mjs',
   'src/capture/procwatch.mjs',
   'src/capture/conpty.mjs',
   'src/analyze/rules.mjs',
