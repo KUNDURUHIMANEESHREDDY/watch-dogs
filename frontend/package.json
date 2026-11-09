@@ -20,7 +20,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/vite": "^4.1.16",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
